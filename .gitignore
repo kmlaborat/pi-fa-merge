@@ -3,3 +3,6 @@ dist/
 *.tsbuildinfo
 .DS_Store
 .env
+
+# Local technical documents
+docs/technical-issue-*.md
