@@ -193,15 +193,19 @@ function validateStructure(originalCode: string, updatedCode: string): Structure
   }
   
   // Check prefix preservation (first 20% of original code should be present)
+  // Skip for very small files (5 lines or less) to avoid false positives
   const originalLinesList = originalCode.split('\n');
-  const prefixLength = Math.max(5, Math.floor(originalLinesList.length * 0.2));
-  const originalPrefix = originalLinesList.slice(0, prefixLength).join('\n').trim();
   
-  if (originalPrefix && !updatedCode.startsWith(originalPrefix)) {
-    return {
-      valid: false,
-      details: `Critical error: Original code prefix was lost. Expected first ${prefixLength} lines to be preserved but they were not found in the merged code.`
-    };
+  if (originalLinesList.length > 5) {
+    const prefixLength = Math.max(5, Math.floor(originalLinesList.length * 0.2));
+    const originalPrefix = originalLinesList.slice(0, prefixLength).join('\n').trim();
+    
+    if (originalPrefix && !updatedCode.startsWith(originalPrefix)) {
+      return {
+        valid: false,
+        details: `Critical error: Original code prefix was lost. Expected first ${prefixLength} lines to be preserved but they were not found in the merged code.`
+      };
+    }
   }
   
   return { valid: true };
