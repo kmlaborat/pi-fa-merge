@@ -109,7 +109,7 @@ result = fast-apply-merge({
 
 | Error | Description |
 |-------|-------------|
-| `VALIDATION_ERROR` | Input validation failed (empty or invalid parameters) |
+| `VALIDATION_ERROR` | Input validation failed (empty or invalid parameters, file too large) |
 | `PROVIDER_AUTH_FAILED` | API authentication failed or API key not configured |
 | `TIMEOUT` | Request timed out waiting for response |
 | `MALFORMED_OUTPUT` | Model output couldn't be parsed or missing required tags |
@@ -118,6 +118,8 @@ result = fast-apply-merge({
 | `API_ERROR` | General API error (non-authentication, non-timeout) |
 | `EXECUTION_ERROR` | Unexpected error during tool execution |
 | `UNKNOWN_ERROR` | Error with unknown cause |
+
+**Note**: The `details` field in error responses contains specific information about what validation failed (e.g., "Prefix was lost", "Function X was lost", "File too large").
 
 ## Development
 

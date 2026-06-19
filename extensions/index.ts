@@ -94,6 +94,7 @@ const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY_MS = 1000;
 const REQUEST_TIMEOUT_MS = 60000;
 const MAX_CONTEXT_TOKENS = 8192;
+const MAX_CODE_LINES = 500; // Maximum number of lines for safety
 
 // ============================================================================
 // Prompt Builder (Task 1)
@@ -196,10 +197,10 @@ function validateStructure(originalCode: string, updatedCode: string): Structure
   const prefixLength = Math.max(5, Math.floor(originalLinesList.length * 0.2));
   const originalPrefix = originalLinesList.slice(0, prefixLength).join('\n').trim();
   
-  if (originalPrefix && !updatedCode.startsWith(originalPrefix.split('\n')[0].trim())) {
+  if (originalPrefix && !updatedCode.startsWith(originalPrefix)) {
     return {
       valid: false,
-      details: "Critical error: Original code prefix was lost. The merged code does not start with the original content."
+      details: `Critical error: Original code prefix was lost. Expected first ${prefixLength} lines to be preserved but they were not found in the merged code.`
     };
   }
   
@@ -390,6 +391,16 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
       success: false,
       error: "CONTEXT_EXCEEDED",
       details: `Input exceeds maximum context length. Estimated tokens: ${estimatedTokens}`,
+    };
+  }
+
+  // Validate file size (line count)
+  const lineCount = params.original_code.split('\n').length;
+  if (lineCount > MAX_CODE_LINES) {
+    return {
+      success: false,
+      error: "VALIDATION_ERROR",
+      details: `File too large: ${lineCount} lines exceeds maximum of ${MAX_CODE_LINES} lines. Please split the file or process in smaller chunks.`,
     };
   }
 
