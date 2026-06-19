@@ -18,7 +18,7 @@ This tool supports **any OpenAI-compatible endpoint** serving fast-apply models,
 ### From git
 
 ```bash
-pi install git:github.com/user/pi-fa-merge@v1.0.0
+pi install git:github.com/kmlaborat/pi-fa-merge
 ```
 
 ### Local development
