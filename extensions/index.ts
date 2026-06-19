@@ -134,12 +134,69 @@ Output format:
 }
 
 // ============================================================================
+// Structure Validation (Task 3.5)
+// Validates that the merged code maintains the original code structure
+// ============================================================================
+
+interface StructureValidationResult {
+  valid: boolean;
+  details?: string;
+}
+
+function validateStructure(originalCode: string, updatedCode: string): StructureValidationResult {
+  // Extract important elements from original code
+  const originalFunctions = originalCode.match(/\b(?:function|def|class)\s+(\w+)/g);
+  const originalImports = originalCode.match(/\b(?:import|require)\s+/g);
+  
+  // Check function/class preservation
+  if (originalFunctions) {
+    for (const fn of originalFunctions) {
+      const fnName = fn.split(/\s+/).pop();
+      if (!updatedCode.includes(fnName)) {
+        return {
+          valid: false,
+          details: `Critical error: Original function/class "${fnName}" was lost during merge.`
+        };
+      }
+    }
+  }
+  
+  // Check import preservation (imports should generally be preserved)
+  if (originalImports && originalImports.length > 0) {
+    const updatedImports = updatedCode.match(/\b(?:import|require)\s+/g);
+    if (!updatedImports || updatedImports.length === 0) {
+      return {
+        valid: false,
+        details: "Critical error: All imports/require statements were lost during merge."
+      };
+    }
+  }
+  
+  // Check code line count decrease (50%+ decrease is suspicious)
+  const originalLines = originalCode.split('\n').filter(l => l.trim()).length;
+  const updatedLines = updatedCode.split('\n').filter(l => l.trim()).length;
+  
+  if (originalLines > 0 && updatedLines < originalLines * 0.5) {
+    return {
+      valid: false,
+      details: `Critical error: Code lost too many lines (${originalLines} -> ${updatedLines}).`
+    };
+  }
+  
+  return { valid: true };
+}
+
+// ============================================================================
 // Output Parser (Task 3)
 // ============================================================================
 
-function parseOutput(rawResponse: string): MergeResult {
+function parseOutput(rawResponse: string, originalCode: string): MergeResult {
   const openTag = "<updated-code>";
   const closeTag = "</updated-code>";
+
+  // Debug logging
+  console.log(`[pi-fa-merge] Raw response length: ${rawResponse.length}`);
+  console.log(`[pi-fa-merge] Raw response preview: ${rawResponse.substring(0, 200)}`);
 
   const openIndex = rawResponse.indexOf(openTag);
   if (openIndex === -1) {
@@ -167,6 +224,16 @@ function parseOutput(rawResponse: string): MergeResult {
   const codeBlockMatch = code.match(/^```[^\n]*\n?([\s\S]*?)\n?```$/);
   if (codeBlockMatch) {
     code = codeBlockMatch[1].trim();
+  }
+
+  // Structure validation
+  const validation = validateStructure(originalCode, code);
+  if (!validation.valid) {
+    return {
+      success: false,
+      error: "STRUCTURE_MANGLE_ERROR",
+      details: validation.details,
+    };
   }
 
   return {
@@ -344,8 +411,8 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
     };
   }
 
-  // Parse output
-  return parseOutput(rawResponse);
+  // Parse output with structure validation
+  return parseOutput(rawResponse, params.original_code);
 }
 
 // ============================================================================

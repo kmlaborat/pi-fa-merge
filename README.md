@@ -114,6 +114,7 @@ result = fast-apply-merge({
 | `TIMEOUT` | Request timed out waiting for response |
 | `MALFORMED_OUTPUT` | Model output couldn't be parsed or missing required tags |
 | `CONTEXT_EXCEEDED` | Input exceeds maximum context length (8192 estimated tokens) |
+| `STRUCTURE_MANGLE_ERROR` | Merged code lost critical structure from original code (possible prompt injection) |
 | `API_ERROR` | General API error (non-authentication, non-timeout) |
 | `EXECUTION_ERROR` | Unexpected error during tool execution |
 | `UNKNOWN_ERROR` | Error with unknown cause |
