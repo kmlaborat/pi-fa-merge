@@ -31,7 +31,7 @@ pi install /path/to/pi-fa-merge
 
 ### Setup `.env` File
 
-After installing the extension, create a `.env` file in the pi-fa-merge extension directory:
+After installing the extension, create a `.env` file in the pi-fa-merge package directory:
 
 ```bash
 # Copy the template
