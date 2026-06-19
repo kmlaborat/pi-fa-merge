@@ -126,9 +126,17 @@ Instructions:
 4. Maintain proper indentation, comments, and code structure
 5. Output ONLY the complete merged code wrapped in <updated-code> tags
 
+CRITICAL REQUIREMENTS:
+- Do NOT omit any part of the original code
+- Do NOT use ellipsis (...) or any abbreviation to skip code
+- Output MUST include ALL lines from the original code, from line 1 to the last line
+- The merged code must be COMPLETE and SELF-CONTAINED
+- Do NOT truncate the beginning or end of the code
+- If the original code has 100 lines, your output should have at least 100 lines (plus any additions)
+
 Output format:
 <updated-code>
-[your complete merged code here]
+[your complete merged code here - include EVERY line]
 </updated-code>
 `;
 }
@@ -180,6 +188,18 @@ function validateStructure(originalCode: string, updatedCode: string): Structure
     return {
       valid: false,
       details: `Critical error: Code lost too many lines (${originalLines} -> ${updatedLines}).`
+    };
+  }
+  
+  // Check prefix preservation (first 20% of original code should be present)
+  const originalLinesList = originalCode.split('\n');
+  const prefixLength = Math.max(5, Math.floor(originalLinesList.length * 0.2));
+  const originalPrefix = originalLinesList.slice(0, prefixLength).join('\n').trim();
+  
+  if (originalPrefix && !updatedCode.startsWith(originalPrefix.split('\n')[0].trim())) {
+    return {
+      valid: false,
+      details: "Critical error: Original code prefix was lost. The merged code does not start with the original content."
     };
   }
   
