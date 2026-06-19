@@ -29,20 +29,34 @@ pi install /path/to/pi-fa-merge
 
 ## Configuration
 
-### Environment Variables
+### Setup `.env` File
 
-Set the following environment variables:
+After installing the extension, create a `.env` file in the pi-fa-merge extension directory:
 
 ```bash
+# Copy the template
+# On Windows:
+copy .env.example .env
+
+# On macOS/Linux:
+cp .env.example .env
+```
+
+Then edit `.env` with your settings:
+
+```env
 # Required: API key for authentication
-export FAST_APPLY_API_KEY="your-api-key"
+FAST_APPLY_API_KEY="your-api-key"
 
 # Optional: Base URL of the OpenAI-compatible endpoint
-export FAST_APPLY_ENDPOINT_URL="https://api.fireworks.ai/inference/v1"
+FAST_APPLY_ENDPOINT_URL="https://api.fireworks.ai/inference/v1"
 
 # Optional: Model name to use
-export FAST_APPLY_MODEL_NAME="fast-apply-7b"
+FAST_APPLY_MODEL_NAME="fast-apply-7b"
 ```
+
+**Note**: The `.env` file is not included in the repository. A template file `.env.example` is provided for reference.
+
 
 ## Usage
 
