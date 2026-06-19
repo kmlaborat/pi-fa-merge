@@ -2,7 +2,12 @@
  * pi-fa-merge: Fast-apply merge tool for AI coding agents
  *
  * Merges partial code diffs (update_snippets) into original source code
- * using Morph or Fireworks fast-apply models.
+ * using any OpenAI-compatible endpoint serving fast-apply models.
+ *
+ * This package implements the **kortix-ai/fast-apply** specification
+ * (https://github.com/kortix-ai/fast-apply), which defines the tag-based
+ * prompt format (`<original-code>`, `<update-snippet>`, `<updated-code>`)
+ * and dedicated model interfaces for efficient code merging.
  *
  * @package pi-fa-merge
  */
@@ -17,7 +22,7 @@ import { Type } from "typebox";
 interface MergeParams {
   original_code: string;
   update_snippet: string;
-  provider?: "morph" | "fireworks";
+  endpoint_url?: string;
   model_name?: string;
 }
 
@@ -32,16 +37,22 @@ interface MergeResult {
 // Constants
 // ============================================================================
 
-const MORPH_API_URL = "https://api.morph.run/v1/chat/completions";
-const FIREWORKS_API_URL = "https://api.fireworks.ai/inference/v1/chat/completions";
-const DEFAULT_MORPH_MODEL = "morph-large-latest";
-const DEFAULT_FIREWORKS_MODEL = "Kortix/FastApply-7B-v1.0";
+const DEFAULT_ENDPOINT_URL = "https://api.fireworks.ai/inference/v1";
+const DEFAULT_MODEL_NAME = "fast-apply-7b";
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY_MS = 1000;
 const REQUEST_TIMEOUT_MS = 60000;
+const MAX_CONTEXT_TOKENS = 8192;
 
 // ============================================================================
 // Prompt Builder (Task 1)
+//
+// Constructs the ChatML-format prompt following the kortix-ai/fast-apply
+// specification's recommended tag-based structure.
+// See: https://github.com/kortix-ai/fast-apply
+//
+// The prompt uses the fast-apply tag structure: <original-code>,
+// <update-snippet>, and expects output wrapped in <updated-code> tags.
 // ============================================================================
 
 function buildPrompt(originalCode: string, updateSnippet: string): string {
@@ -114,61 +125,31 @@ function parseOutput(rawResponse: string): MergeResult {
 }
 
 // ============================================================================
-// Provider Client (Task 2)
+// OpenAI-Compatible API Client (Task 2)
+//
+// Generic client for any OpenAI-compatible endpoint serving fast-apply models.
+// Uses the standard Chat Completions API format.
 // ============================================================================
 
-async function callMorphApi(apiKey: string, prompt: string): Promise<string> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(MORPH_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: DEFAULT_MORPH_MODEL,
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-        temperature: 0,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Morph API error: ${response.status} ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data.choices[0].message.content;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function callFireworksApi(
+async function callOpenAiCompatibleApi(
+  endpointUrl: string,
   apiKey: string,
   modelName: string,
   prompt: string
 ): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const url = `${endpointUrl}/chat/completions`;
 
   try {
-    const response = await fetch(FIREWORKS_API_URL, {
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: `accounts/fireworks/models/${modelName}`,
+        model: modelName,
         messages: [
           {
             role: "user",
@@ -181,7 +162,7 @@ async function callFireworksApi(
     });
 
     if (!response.ok) {
-      throw new Error(`Fireworks API error: ${response.status} ${response.statusText}`);
+      throw new Error(`API error: ${response.status} ${response.statusText}`);
     }
 
     const data = await response.json();
@@ -234,8 +215,8 @@ function isRetryable(error: unknown): boolean {
 // ============================================================================
 
 async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise<MergeResult> {
-  const provider = params.provider || "morph";
-  const modelName = params.model_name || DEFAULT_FIREWORKS_MODEL;
+  const endpointUrl = params.endpoint_url || process.env.FAST_APPLY_ENDPOINT_URL || DEFAULT_ENDPOINT_URL;
+  const modelName = params.model_name || process.env.FAST_APPLY_MODEL_NAME || DEFAULT_MODEL_NAME;
 
   // Validate inputs
   if (!params.original_code || !params.original_code.trim()) {
@@ -255,39 +236,33 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   }
 
   // Get API key from environment
-  let apiKey: string | undefined;
-  if (provider === "morph") {
-    apiKey = process.env.MORPH_API_KEY;
-    if (!apiKey) {
-      return {
-        success: false,
-        error: "PROVIDER_AUTH_FAILED",
-        details: "MORPH_API_KEY environment variable is not set.",
-      };
-    }
-  } else {
-    apiKey = process.env.FIREWORKS_API_KEY;
-    if (!apiKey) {
-      return {
-        success: false,
-        error: "PROVIDER_AUTH_FAILED",
-        details: "FIREWORKS_API_KEY environment variable is not set.",
-      };
-    }
+  const apiKey = process.env.FAST_APPLY_API_KEY;
+  if (!apiKey) {
+    return {
+      success: false,
+      error: "PROVIDER_AUTH_FAILED",
+      details: "FAST_APPLY_API_KEY environment variable is not set.",
+    };
   }
 
-  // Build prompt
+  // Validate context length (estimated tokens = total chars / 4)
+  const estimatedTokens = Math.floor((params.original_code.length + params.update_snippet.length) / 4);
+  if (estimatedTokens > MAX_CONTEXT_TOKENS) {
+    return {
+      success: false,
+      error: "CONTEXT_EXCEEDED",
+      details: `Input exceeds maximum context length. Estimated tokens: ${estimatedTokens}`,
+    };
+  }
+
+  // Build prompt using kortix-ai/fast-apply tag structure
   const prompt = buildPrompt(params.original_code, params.update_snippet);
 
   // Call API with retry
   let rawResponse: string;
   try {
     rawResponse = await withRetry(async () => {
-      if (provider === "morph") {
-        return callMorphApi(apiKey, prompt);
-      } else {
-        return callFireworksApi(apiKey, modelName, prompt);
-      }
+      return callOpenAiCompatibleApi(endpointUrl, apiKey, modelName, prompt);
     });
   } catch (error) {
     if (error instanceof Error) {
@@ -331,7 +306,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "fast-apply-merge",
     label: "Fast-Apply Merge",
-    description: "Merge code diffs using fast-apply models (Morph or Fireworks)",
+    description: "Merge code diffs using fast-apply models via OpenAI-compatible endpoints",
     promptSnippet: "Merge update snippets into original code using AI models",
     promptGuidelines: [
       "Use fast-apply-merge when you need to merge code changes into an existing file efficiently",
@@ -343,15 +318,14 @@ export default function (pi: ExtensionAPI) {
       update_snippet: Type.String({
         description: "The code changes to apply",
       }),
-      provider: Type.Optional(
+      endpoint_url: Type.Optional(
         Type.String({
-          description: "The API provider to use",
-          default: "morph",
+          description: "The base URL of the OpenAI-compatible endpoint",
         })
       ),
       model_name: Type.Optional(
         Type.String({
-          description: "Model name (required for fireworks provider)",
+          description: "Model name to use (defaults to fast-apply-7b)",
         })
       ),
     }),

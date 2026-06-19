@@ -1,7 +1,7 @@
 {
   "name": "pi-fa-merge",
   "version": "1.0.0",
-  "description": "Fast-apply merge tool for AI agents to merge code diffs at high speed with low token cost",
+  "description": "Fast-apply merge tool based on kortix-ai/fast-apply specification, supporting custom OpenAI-compatible endpoints for AI agents to merge code diffs at high speed with low token cost",
   "keywords": ["pi-package"],
   "main": "extensions/index.ts",
   "peerDependencies": {
