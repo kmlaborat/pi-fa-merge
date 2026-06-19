@@ -15,12 +15,6 @@ This tool supports **any OpenAI-compatible endpoint** serving fast-apply models,
 
 ## Installation
 
-### From npm
-
-```bash
-pi install npm:pi-fa-merge
-```
-
 ### From git
 
 ```bash
