@@ -4,6 +4,9 @@
   "description": "Fast-apply merge tool based on kortix-ai/fast-apply specification, supporting custom OpenAI-compatible endpoints for AI agents to merge code diffs at high speed with low token cost",
   "keywords": ["pi-package"],
   "main": "extensions/index.ts",
+  "dependencies": {
+    "dotenv": "^16.4.7"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
   },

@@ -14,6 +14,57 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import * as fs from "fs";
+import * as path from "path";
+
+// ============================================================================
+// .env File Loader
+// ============================================================================
+
+function loadEnvFile(): void {
+  try {
+    // Try to find .env file in package directory
+    const possiblePaths = [
+      path.join(process.cwd(), '.env'),
+      path.join(__dirname, '..', '.env'),
+      path.join(__dirname, '.env'),
+    ];
+
+    for (const envPath of possiblePaths) {
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, 'utf-8');
+        const lines = content.split('\n');
+        
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          
+          const eqIndex = trimmed.indexOf('=');
+          if (eqIndex === -1) continue;
+          
+          const key = trimmed.substring(0, eqIndex).trim();
+          let value = trimmed.substring(eqIndex + 1).trim();
+          
+          // Remove surrounding quotes if present
+          if ((value.startsWith('"') && value.endsWith('"')) || 
+              (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1);
+          }
+          
+          process.env[key] = value;
+        }
+        
+        return; // Found and loaded .env file
+      }
+    }
+  } catch (error) {
+    // Silently fail - environment variables might be set externally
+    console.log(`[pi-fa-merge] Warning: Could not load .env file: ${error}`);
+  }
+}
+
+// Load environment variables from .env file at module initialization
+loadEnvFile();
 
 // ============================================================================
 // Types
