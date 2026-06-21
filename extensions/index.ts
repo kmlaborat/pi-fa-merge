@@ -103,22 +103,22 @@ const MAX_CODE_LINES = 500; // Maximum number of lines for safety
 // specification's recommended tag-based structure.
 // See: https://github.com/kortix-ai/fast-apply
 //
-// The prompt uses the fast-apply tag structure: <original-code>,
-// <update-snippet>, and expects output wrapped in <updated-code> tags.
+// The prompt uses the fast-apply tag structure: <code>,
+// <update>, and expects output wrapped in <updated-code> tags.
 // ============================================================================
 
 function buildPrompt(originalCode: string, updateSnippet: string): string {
   return `You are a code merge assistant. Your job is to merge the update snippet into the original code.
 
 Original code:
-<original-code>
+<code>
 ${originalCode}
-</original-code>
+</code>
 
 Update snippet (the changes to apply):
-<update-snippet>
+<update>
 ${updateSnippet}
-</update-snippet>
+</update>`}]
 
 Instructions:
 1. Analyze the original code and the update snippet
