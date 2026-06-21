@@ -38,6 +38,12 @@ On success, the package guarantees a JSON object or serialized output with the f
 
 * **Raw code return:** `updated_code` must contain only pure code, with no metadata such as model output tags (`<updated-code>` and `</updated-code>`), Markdown code blocks (```), or other wrappers.
 * **Structural preservation:** Indentation, comments, blank lines, and function ordering outside the diff-applied regions must be completely preserved.
+* **Structure validation:** The system validates that critical symbols from the original code are preserved in the merged output. The validation checks:
+  * Function/class names are preserved
+  * Import/require statements are preserved
+  * Code line count does not decrease by more than 50%
+  * The first 20% of the original code prefix is preserved (for files > 5 lines)
+  * If validation fails, the operation returns `success: false` with error `STRUCTURE_MANGLE_ERROR`
 
 ### 4. Constraints & Invariants
 
@@ -69,6 +75,7 @@ Conditions that must always be maintained during system operation.
 | `TIMEOUT` | Request timed out waiting for response |
 | `MALFORMED_OUTPUT` | Model output couldn't be parsed or missing required tags |
 | `CONTEXT_EXCEEDED` | Input exceeds maximum context length (8192 estimated tokens) |
+| `STRUCTURE_MANGLE_ERROR` | Merged code lost critical structure from original code (function names, imports, or excessive line loss) |
 | `API_ERROR` | General API error (non-authentication, non-timeout) |
 | `EXECUTION_ERROR` | Unexpected error during tool execution |
 | `UNKNOWN_ERROR` | Error with unknown cause |
@@ -83,6 +90,18 @@ Expected failure patterns and system behavior.
 | **API Authentication Error / Timeout** | Return `success: false` with a clear error reason (e.g., `"PROVIDER_AUTH_FAILED"`, `"TIMEOUT"`). |
 | **Tag Not Found Error** | Return `success: false, error: "MALFORMED_OUTPUT"`. Prevents the critical bug of overwriting files with raw output. |
 | **Context Length Exceeded** | If the estimated token count (calculated from total character count divided by 4) exceeds 8192 tokens, immediately raise a `CONTEXT_EXCEEDED` error. |
+| **Structure Mangle Error** | If the merged code loses critical structure (function names, imports, >50% lines lost, or prefix lost), return `success: false, error: "STRUCTURE_MANGLE_ERROR"` with details indicating what was lost. |
+
+### Debug Logging
+
+For troubleshooting and security auditing, the system logs raw API responses to stdout:
+
+```
+[pi-fa-merge] Raw response length: 1234
+[pi-fa-merge] Raw response preview: <updated-code>def hello():...
+```
+
+This enables verification that the model is responding correctly and helps diagnose `MALFORMED_OUTPUT` or `STRUCTURE_MANGLE_ERROR` cases.
 
 ### 6. Acceptance Tests
 

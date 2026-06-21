@@ -118,7 +118,7 @@ ${originalCode}
 Update snippet (the changes to apply):
 <update>
 ${updateSnippet}
-</update>`}]
+</update>
 
 Instructions:
 1. Analyze the original code and the update snippet
