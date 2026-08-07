@@ -1,12 +1,15 @@
 {
   "name": "pi-fa-merge",
-  "version": "1.0.0",
-  "description": "Fast-apply merge tool based on kortix-ai/fast-apply specification, supporting custom OpenAI-compatible endpoints for AI agents to merge code diffs at high speed with low token cost",
+  "version": "2.0.0",
+  "description": "Fast-apply merge tool based on kortix-ai/fast-apply specification, supporting custom OpenAI-compatible endpoints for AI agents to merge code diffs at high speed with low token cost and write directly to files",
   "keywords": ["pi-package"],
   "main": "extensions/index.ts",
-  "dependencies": {
-    "dotenv": "^16.4.7"
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "echo 'No tests configured yet' && exit 0",
+    "lint": "echo 'No linting configured yet' && exit 0"
   },
+  "dependencies": {},
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
   },

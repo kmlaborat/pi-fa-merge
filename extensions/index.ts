@@ -13,6 +13,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import * as fs from "fs";
 import * as path from "path";
@@ -73,6 +74,8 @@ loadEnvFile();
 interface MergeParams {
   original_code: string;
   update_snippet: string;
+  file: string;                // Path to the file to edit
+  anchor: string;              // Exact text for scope matching and hash verification
   endpoint_url?: string;
   model_name?: string;
 }
@@ -85,6 +88,28 @@ interface MergeResult {
 }
 
 // ============================================================================
+// Logging
+// ============================================================================
+
+function log(level: 'debug' | 'info' | 'warn' | 'error', message: string, ...args: any[]): void {
+  const prefix = `[pi-fa-merge:${level.toUpperCase()}]`;
+  switch (level) {
+    case 'debug':
+      console.log(`${prefix} ${message}`, ...args);
+      break;
+    case 'info':
+      console.log(`${prefix} ${message}`, ...args);
+      break;
+    case 'warn':
+      console.warn(`${prefix} ${message}`, ...args);
+      break;
+    case 'error':
+      console.error(`${prefix} ${message}`, ...args);
+      break;
+  }
+}
+
+// ============================================================================
 // Constants
 // ============================================================================
 
@@ -94,7 +119,75 @@ const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY_MS = 1000;
 const REQUEST_TIMEOUT_MS = 60000;
 const MAX_CONTEXT_TOKENS = 8192;
-const MAX_CODE_LINES = 500; // Maximum number of lines for safety
+
+// Configurable via environment variables
+function getMaxCodeLines(): number {
+  return parseInt(process.env.FAST_APPLY_MAX_LINES ?? '500', 10);
+}
+
+function getRequestTimeoutMs(): number {
+  return parseInt(process.env.FAST_APPLY_TIMEOUT ?? '60000', 10);
+}
+
+// ============================================================================
+// AnchorEdit Binary Resolution (Task 2)
+// ============================================================================
+
+function getAnchorEditBin(): string {
+  return process.env.ANCHOREDIT_BIN ?? "anchoredit";
+}
+
+// ============================================================================
+// File Path Resolution (Task 3)
+// ============================================================================
+
+function resolveFilePath(filePath: string, cwd: string): string {
+  // Windows absolute path (e.g. C:\foo\bar.rs) — pass through
+  if (path.isAbsolute(filePath) && /^[a-zA-Z]:\\/.test(filePath)) {
+    return filePath;
+  }
+
+  // Non-Windows platforms: standard path resolution
+  if (process.platform !== 'win32') {
+    const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+    if (fs.existsSync(resolved)) {
+      return resolved;
+    }
+    return filePath;
+  }
+
+  // Windows-specific path resolution
+  let resolved: string;
+
+  // Looks like a Unix-style absolute path (/tmp/..., /home/..., etc.)
+  if (filePath.startsWith("/")) {
+    try {
+      // Use cygpath -w to translate mount-aware paths to Windows native format.
+      const shellPath: string = process.env.ComSpec ?? "/bin/sh";
+      const { execSync } = require("node:child_process");
+      resolved = execSync(
+        "cygpath -w '" + filePath.replace(/'/g, "'\"'\"'") + "'",
+        { shell: shellPath },
+      )
+        .toString()
+        .trim();
+    } catch {
+      // cygpath not available — fall through to relative resolution
+      resolved = path.resolve(cwd, filePath);
+    }
+  } else {
+    // Relative path — resolve against cwd
+    resolved = path.resolve(cwd, filePath);
+  }
+
+  // Verify the file exists at the resolved location
+  if (fs.existsSync(resolved)) {
+    return resolved;
+  }
+
+  // Fall back to the original path so anchoredit can report its own error
+  return filePath;
+}
 
 // ============================================================================
 // Prompt Builder (Task 1)
@@ -219,10 +312,6 @@ function parseOutput(rawResponse: string, originalCode: string): MergeResult {
   const openTag = "<updated-code>";
   const closeTag = "</updated-code>";
 
-  // Debug logging
-  console.log(`[pi-fa-merge] Raw response length: ${rawResponse.length}`);
-  console.log(`[pi-fa-merge] Raw response preview: ${rawResponse.substring(0, 200)}`);
-
   const openIndex = rawResponse.indexOf(openTag);
   if (openIndex === -1) {
     return {
@@ -281,10 +370,13 @@ async function callOpenAiCompatibleApi(
   prompt: string
 ): Promise<string> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutMs = getRequestTimeoutMs();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const url = `${endpointUrl}/chat/completions`;
 
   try {
+    log.debug(`Calling API: ${endpointUrl}, model: ${modelName}, timeout: ${timeoutMs}ms`);
+    
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -309,6 +401,7 @@ async function callOpenAiCompatibleApi(
     }
 
     const data = await response.json();
+    log.debug("API response received");
     return data.choices[0].message.content;
   } finally {
     clearTimeout(timeout);
@@ -361,8 +454,15 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   const endpointUrl = params.endpoint_url || process.env.FAST_APPLY_ENDPOINT_URL || DEFAULT_ENDPOINT_URL;
   const modelName = params.model_name || process.env.FAST_APPLY_MODEL_NAME || DEFAULT_MODEL_NAME;
 
+  log.info("Starting merge operation", {
+    file: params.file,
+    endpoint: endpointUrl,
+    model: modelName,
+  });
+
   // Validate inputs
   if (!params.original_code || !params.original_code.trim()) {
+    log.warn("Validation failed: original_code is empty");
     return {
       success: false,
       error: "VALIDATION_ERROR",
@@ -371,6 +471,7 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   }
 
   if (!params.update_snippet || !params.update_snippet.trim()) {
+    log.warn("Validation failed: update_snippet is empty");
     return {
       success: false,
       error: "VALIDATION_ERROR",
@@ -381,6 +482,7 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   // Get API key from environment
   const apiKey = process.env.FAST_APPLY_API_KEY;
   if (!apiKey) {
+    log.warn("FAST_APPLY_API_KEY environment variable is not set");
     return {
       success: false,
       error: "PROVIDER_AUTH_FAILED",
@@ -391,6 +493,7 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   // Validate context length (estimated tokens = total chars / 4)
   const estimatedTokens = Math.floor((params.original_code.length + params.update_snippet.length) / 4);
   if (estimatedTokens > MAX_CONTEXT_TOKENS) {
+    log.warn(`Context length exceeded: ${estimatedTokens} tokens`);
     return {
       success: false,
       error: "CONTEXT_EXCEEDED",
@@ -400,13 +503,17 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
 
   // Validate file size (line count)
   const lineCount = params.original_code.split('\n').length;
-  if (lineCount > MAX_CODE_LINES) {
+  const maxLines = getMaxCodeLines();
+  if (lineCount > maxLines) {
+    log.warn(`File too large: ${lineCount} lines exceeds maximum of ${maxLines} lines`);
     return {
       success: false,
       error: "VALIDATION_ERROR",
-      details: `File too large: ${lineCount} lines exceeds maximum of ${MAX_CODE_LINES} lines. Please split the file or process in smaller chunks.`,
+      details: `File too large: ${lineCount} lines exceeds maximum of ${maxLines} lines. Please split the file or process in smaller chunks.`,
     };
   }
+
+  log.debug(`Processing file with ${lineCount} lines, estimated ${estimatedTokens} tokens`);
 
   // Build prompt using kortix-ai/fast-apply tag structure
   const prompt = buildPrompt(params.original_code, params.update_snippet);
@@ -414,10 +521,13 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   // Call API with retry
   let rawResponse: string;
   try {
+    log.info("Calling API endpoint");
     rawResponse = await withRetry(async () => {
       return callOpenAiCompatibleApi(endpointUrl, apiKey, modelName, prompt);
     });
+    log.info("API call successful");
   } catch (error) {
+    log.error("API call failed", error);
     if (error instanceof Error) {
       if (error.name === "AbortError") {
         return {
@@ -447,7 +557,16 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   }
 
   // Parse output with structure validation
-  return parseOutput(rawResponse, params.original_code);
+  log.debug("Parsing API response");
+  const result = parseOutput(rawResponse, params.original_code);
+  
+  if (result.success) {
+    log.info("Merge operation completed successfully");
+  } else {
+    log.error(`Merge operation failed: ${result.error}`);
+  }
+  
+  return result;
 }
 
 // ============================================================================
@@ -455,6 +574,8 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
 // ============================================================================
 
 export default function (pi: ExtensionAPI) {
+  const bin = getAnchorEditBin();
+
   // Register the merge tool
   pi.registerTool({
     name: "fast-apply-merge",
@@ -471,6 +592,12 @@ export default function (pi: ExtensionAPI) {
       update_snippet: Type.String({
         description: "The code changes to apply",
       }),
+      file: Type.String({
+        description: "Path to the file to edit",
+      }),
+      anchor: Type.String({
+        description: "Exact text to match in the file. Must appear exactly once.",
+      }),
       endpoint_url: Type.Optional(
         Type.String({
           description: "The base URL of the OpenAI-compatible endpoint",
@@ -484,13 +611,131 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      log.info("Tool execution started", {
+        file: params.file,
+        model: params.model_name,
+      });
+      
       try {
-        const result = await performMerge(params as MergeParams, ctx as ExtensionContext);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          details: result,
-        };
+        // Validate file and anchor parameters (these are required for file operation)
+        if (!params.file || !params.file.trim()) {
+          log.warn("Validation failed: file parameter is missing");
+          return {
+            content: [{ type: "text", text: JSON.stringify({
+              success: false,
+              error: "VALIDATION_ERROR",
+              details: "file parameter is required.",
+            }, null, 2) }],
+            isError: true,
+          };
+        }
+
+        if (!params.anchor || !params.anchor.trim()) {
+          log.warn("Validation failed: anchor parameter is missing");
+          return {
+            content: [{ type: "text", text: JSON.stringify({
+              success: false,
+              error: "VALIDATION_ERROR",
+              details: "anchor parameter is required.",
+            }, null, 2) }],
+            isError: true,
+          };
+        }
+
+        // Resolve file path
+        const resolvedFilePath = resolveFilePath(params.file, ctx.cwd);
+        log.debug(`Resolved file path: ${resolvedFilePath}`);
+
+        // Check file exists
+        if (!fs.existsSync(resolvedFilePath)) {
+          log.warn(`File not found: ${resolvedFilePath}`);
+          return {
+            content: [{ type: "text", text: JSON.stringify({
+              success: false,
+              error: "VALIDATION_ERROR",
+              details: `File not found: ${resolvedFilePath}`,
+            }, null, 2) }],
+            isError: true,
+          };
+        }
+
+        // Perform merge (validation of original_code and update_snippet is handled there)
+        const mergeResult = await performMerge(params as MergeParams, ctx as ExtensionContext);
+        if (!mergeResult.success) {
+          return {
+            content: [{ type: "text", text: JSON.stringify(mergeResult, null, 2) }],
+            isError: true,
+          };
+        }
+
+        // Apply edit using AnchorEdit with file mutation queue
+        log.info("Applying changes to file with AnchorEdit");
+        return await withFileMutationQueue(resolvedFilePath, async () => {
+          const execResult = await pi.exec(
+            bin,
+            [
+              "apply",
+              "--file", resolvedFilePath,
+              "--anchor", params.anchor,
+              "--replacement", mergeResult.updated_code
+            ],
+            { signal: _signal },
+          );
+
+          if (execResult.code !== 0) {
+            const output = execResult.stderr || execResult.stdout || "";
+            log.error(`AnchorEdit failed: ${output}`);
+            
+            if (output.includes("NO_MATCH")) {
+              return {
+                content: [{ type: "text", text: JSON.stringify({
+                  success: false,
+                  error: "ANCHOREDIT_NO_MATCH",
+                  details: "The anchor was not found in the file. Please read the file and revise the anchor.",
+                }, null, 2) }],
+                isError: true,
+              };
+            }
+            
+            if (output.includes("MULTIPLE_MATCHES")) {
+              return {
+                content: [{ type: "text", text: JSON.stringify({
+                  success: false,
+                  error: "ANCHOREDIT_MULTIPLE",
+                  details: "The anchor matched more than once. Use a more specific anchor.",
+                }, null, 2) }],
+                isError: true,
+              };
+            }
+            
+            if (output.includes("HASH_MISMATCH")) {
+              return {
+                content: [{ type: "text", text: JSON.stringify({
+                  success: false,
+                  error: "ANCHOREDIT_HASH_MISMATCH",
+                  details: "Hash mismatch detected. The file has been changed externally. Please re-read the file and try again.",
+                }, null, 2) }],
+                isError: true,
+              };
+            }
+            
+            return {
+              content: [{ type: "text", text: JSON.stringify({
+                success: false,
+                error: "ANCHOREDIT_ERROR",
+                details: output.trim(),
+              }, null, 2) }],
+              isError: true,
+            };
+          }
+
+          log.info("File updated successfully");
+          return {
+            content: [{ type: "text", text: execResult.stdout.trim() }],
+          };
+        });
       } catch (error) {
+        log.error("Tool execution failed", error);
         const errorResult: MergeResult = {
           success: false,
           error: "EXECUTION_ERROR",

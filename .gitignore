@@ -6,3 +6,4 @@ dist/
 
 # Local technical documents
 docs/technical-issue-*.md
+docs/refactoring-plan-*.md

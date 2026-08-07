@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-latest
+          - os: windows-latest
+    env:
+      NODE_VERSION: '20'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify Python not required
+        shell: bash
+        run: |
+          echo "Verifying Python is not required for this package..."
+          if grep -i "python" package.json; then
+            echo "ERROR: package.json contains Python references"
+            exit 1
+          fi
+          echo "✓ No Python dependencies in package.json"
+
+      - name: Show environment info
+        shell: bash
+        run: |
+          echo "=== Environment Information ==="
+          echo "OS: $RUNNER_OS"
+          echo "Architecture: $(node -p process.arch)"
+          echo "Platform: $(node -p process.platform)"
+          echo "Node version: $(node -v)"
+          echo "==============================="
+
+      - name: Verify SPEC compliance - no external dependencies
+        shell: bash
+        run: |
+          echo "=== SPEC Compliance Check ==="
+          echo "Checking for external dependencies..."
+          
+          # Check if package.json has dependencies
+          if grep -q '"dependencies".*[^}]' package.json; then
+            echo "ERROR: package.json contains external dependencies"
+            echo "SPEC §4 requires zero external dependencies (Node.js standard library only)"
+            exit 1
+          fi
+          
+          echo "✓ No external dependencies in package.json"
+          
+          # Check for Python imports in source
+          if grep -r "import.*python" extensions/; then
+            echo "ERROR: Found Python import"
+            exit 1
+          fi
+          
+          echo "✓ No Python dependencies found"
+          echo "=== SPEC Compliance Check Complete ==="
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Run tests (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: npm test
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: npm test
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npm run lint || echo "Lint warnings (non-blocking)"
