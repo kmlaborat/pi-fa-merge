@@ -72,10 +72,10 @@ loadEnvFile();
 // ============================================================================
 
 interface MergeParams {
-  original_code: string;
-  update_snippet: string;
   file: string;                // Path to the file to edit
-  anchor: string;              // Exact text for scope matching and hash verification
+  source: string;              // Current content to transform (must be exact)
+  instruction: string;         // Natural language instruction for the change
+  anchor?: string;             // Exact text for scope matching (defaults to source)
   endpoint_url?: string;
   model_name?: string;
 }
@@ -130,7 +130,7 @@ function getRequestTimeoutMs(): number {
 }
 
 // ============================================================================
-// AnchorEdit Binary Resolution (Task 2)
+// AnchorEdit Binary Resolution
 // ============================================================================
 
 function getAnchorEditBin(): string {
@@ -138,7 +138,7 @@ function getAnchorEditBin(): string {
 }
 
 // ============================================================================
-// File Path Resolution (Task 3)
+// File Path Resolution
 // ============================================================================
 
 function resolveFilePath(filePath: string, cwd: string): string {
@@ -190,7 +190,7 @@ function resolveFilePath(filePath: string, cwd: string): string {
 }
 
 // ============================================================================
-// Prompt Builder (Task 1)
+// Prompt Builder
 //
 // Constructs the ChatML-format prompt following the kortix-ai/fast-apply
 // specification's recommended tag-based structure.
@@ -200,44 +200,44 @@ function resolveFilePath(filePath: string, cwd: string): string {
 // <update>, and expects output wrapped in <updated-code> tags.
 // ============================================================================
 
-function buildPrompt(originalCode: string, updateSnippet: string): string {
-  return `You are a code merge assistant. Your job is to merge the update snippet into the original code.
+function buildPrompt(source: string, instruction: string): string {
+  return `You are a code transformation assistant. Your job is to transform the source code according to the instruction.
 
-Original code:
+Source code:
 <code>
-${originalCode}
+${source}
 </code>
 
-Update snippet (the changes to apply):
+Instruction (the changes to apply):
 <update>
-${updateSnippet}
+${instruction}
 </update>
 
 Instructions:
-1. Analyze the original code and the update snippet
-2. Determine where the changes should be applied
-3. Merge the changes into the original code while preserving all other content
+1. Analyze the source code and the instruction
+2. Determine what changes are needed
+3. Apply the changes to the source code while preserving all other content
 4. Maintain proper indentation, comments, and code structure
-5. Output ONLY the complete merged code wrapped in <updated-code> tags
+5. Output ONLY the complete transformed code wrapped in <updated-code> tags
 
 CRITICAL REQUIREMENTS:
-- Do NOT omit any part of the original code
+- Do NOT omit any part of the source code
 - Do NOT use ellipsis (...) or any abbreviation to skip code
-- Output MUST include ALL lines from the original code, from line 1 to the last line
-- The merged code must be COMPLETE and SELF-CONTAINED
+- Output MUST include ALL lines from the source code, from line 1 to the last line
+- The transformed code must be COMPLETE and SELF-CONTAINED
 - Do NOT truncate the beginning or end of the code
-- If the original code has 100 lines, your output should have at least 100 lines (plus any additions)
+- If the source code has 100 lines, your output should have at least 100 lines (plus any additions)
 
 Output format:
 <updated-code>
-[your complete merged code here - include EVERY line]
+[your complete transformed code here - include EVERY line]
 </updated-code>
 `;
 }
 
 // ============================================================================
-// Structure Validation (Task 3.5)
-// Validates that the merged code maintains the original code structure
+// Structure Validation
+// Validates that the transformed code maintains the source code structure
 // ============================================================================
 
 interface StructureValidationResult {
@@ -245,10 +245,10 @@ interface StructureValidationResult {
   details?: string;
 }
 
-function validateStructure(originalCode: string, updatedCode: string): StructureValidationResult {
-  // Extract important elements from original code
-  const originalFunctions = originalCode.match(/\b(?:function|def|class)\s+(\w+)/g);
-  const originalImports = originalCode.match(/\b(?:import|require)\s+/g);
+function validateStructure(source: string, updatedCode: string): StructureValidationResult {
+  // Extract important elements from source code
+  const originalFunctions = source.match(/\b(?:function|def|class)\s+(\w+)/g);
+  const originalImports = source.match(/\b(?:import|require)\s+/g);
   
   // Check function/class preservation
   if (originalFunctions) {
@@ -257,7 +257,7 @@ function validateStructure(originalCode: string, updatedCode: string): Structure
       if (!updatedCode.includes(fnName)) {
         return {
           valid: false,
-          details: `Critical error: Original function/class "${fnName}" was lost during merge.`
+          details: `Critical error: Original function/class "${fnName}" was lost during transformation.`
         };
       }
     }
@@ -269,34 +269,34 @@ function validateStructure(originalCode: string, updatedCode: string): Structure
     if (!updatedImports || updatedImports.length === 0) {
       return {
         valid: false,
-        details: "Critical error: All imports/require statements were lost during merge."
+        details: "Critical error: All imports/require statements were lost during transformation."
       };
     }
   }
   
   // Check code line count decrease (50%+ decrease is suspicious)
-  const originalLines = originalCode.split('\n').filter(l => l.trim()).length;
+  const sourceLines = source.split('\n').filter(l => l.trim()).length;
   const updatedLines = updatedCode.split('\n').filter(l => l.trim()).length;
   
-  if (originalLines > 0 && updatedLines < originalLines * 0.5) {
+  if (sourceLines > 0 && updatedLines < sourceLines * 0.5) {
     return {
       valid: false,
-      details: `Critical error: Code lost too many lines (${originalLines} -> ${updatedLines}).`
+      details: `Critical error: Code lost too many lines (${sourceLines} -> ${updatedLines}).`
     };
   }
   
-  // Check prefix preservation (first 20% of original code should be present)
+  // Check prefix preservation (first 20% of source code should be present)
   // Skip for very small files (5 lines or less) to avoid false positives
-  const originalLinesList = originalCode.split('\n');
+  const sourceLinesList = source.split('\n');
   
-  if (originalLinesList.length > 5) {
-    const prefixLength = Math.max(5, Math.floor(originalLinesList.length * 0.2));
-    const originalPrefix = originalLinesList.slice(0, prefixLength).join('\n').trim();
+  if (sourceLinesList.length > 5) {
+    const prefixLength = Math.max(5, Math.floor(sourceLinesList.length * 0.2));
+    const sourcePrefix = sourceLinesList.slice(0, prefixLength).join('\n').trim();
     
-    if (originalPrefix && !updatedCode.startsWith(originalPrefix)) {
+    if (sourcePrefix && !updatedCode.startsWith(sourcePrefix)) {
       return {
         valid: false,
-        details: `Critical error: Original code prefix was lost. Expected first ${prefixLength} lines to be preserved but they were not found in the merged code.`
+        details: `Critical error: Source code prefix was lost. Expected first ${prefixLength} lines to be preserved but they were not found in the transformed code.`
       };
     }
   }
@@ -305,10 +305,10 @@ function validateStructure(originalCode: string, updatedCode: string): Structure
 }
 
 // ============================================================================
-// Output Parser (Task 3)
+// Output Parser
 // ============================================================================
 
-function parseOutput(rawResponse: string, originalCode: string): MergeResult {
+function parseOutput(rawResponse: string, source: string): MergeResult {
   const openTag = "<updated-code>";
   const closeTag = "</updated-code>";
 
@@ -341,7 +341,7 @@ function parseOutput(rawResponse: string, originalCode: string): MergeResult {
   }
 
   // Structure validation
-  const validation = validateStructure(originalCode, code);
+  const validation = validateStructure(source, code);
   if (!validation.valid) {
     return {
       success: false,
@@ -357,7 +357,7 @@ function parseOutput(rawResponse: string, originalCode: string): MergeResult {
 }
 
 // ============================================================================
-// OpenAI-Compatible API Client (Task 2)
+// OpenAI-Compatible API Client
 //
 // Generic client for any OpenAI-compatible endpoint serving fast-apply models.
 // Uses the standard Chat Completions API format.
@@ -461,21 +461,21 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   });
 
   // Validate inputs
-  if (!params.original_code || !params.original_code.trim()) {
-    log('warn', "Validation failed: original_code is empty");
+  if (!params.source || !params.source.trim()) {
+    log('warn', "Validation failed: source is empty");
     return {
       success: false,
       error: "VALIDATION_ERROR",
-      details: "original_code is required and cannot be empty.",
+      details: "source is required and cannot be empty.",
     };
   }
 
-  if (!params.update_snippet || !params.update_snippet.trim()) {
-    log('warn', "Validation failed: update_snippet is empty");
+  if (!params.instruction || !params.instruction.trim()) {
+    log('warn', "Validation failed: instruction is empty");
     return {
       success: false,
       error: "VALIDATION_ERROR",
-      details: "update_snippet is required and cannot be empty.",
+      details: "instruction is required and cannot be empty.",
     };
   }
 
@@ -491,7 +491,7 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   }
 
   // Validate context length (estimated tokens = total chars / 4)
-  const estimatedTokens = Math.floor((params.original_code.length + params.update_snippet.length) / 4);
+  const estimatedTokens = Math.floor((params.source.length + params.instruction.length) / 4);
   if (estimatedTokens > MAX_CONTEXT_TOKENS) {
     log('warn', `Context length exceeded: ${estimatedTokens} tokens`);
     return {
@@ -502,21 +502,21 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   }
 
   // Validate file size (line count)
-  const lineCount = params.original_code.split('\n').length;
+  const lineCount = params.source.split('\n').length;
   const maxLines = getMaxCodeLines();
   if (lineCount > maxLines) {
-    log('warn', `File too large: ${lineCount} lines exceeds maximum of ${maxLines} lines`);
+    log('warn', `Source too large: ${lineCount} lines exceeds maximum of ${maxLines} lines`);
     return {
       success: false,
       error: "VALIDATION_ERROR",
-      details: `File too large: ${lineCount} lines exceeds maximum of ${maxLines} lines. Please split the file or process in smaller chunks.`,
+      details: `Source too large: ${lineCount} lines exceeds maximum of ${maxLines} lines. Please split the source or process in smaller chunks.`,
     };
   }
 
-  log('debug', `Processing file with ${lineCount} lines, estimated ${estimatedTokens} tokens`);
+  log('debug', `Processing source with ${lineCount} lines, estimated ${estimatedTokens} tokens`);
 
   // Build prompt using kortix-ai/fast-apply tag structure
-  const prompt = buildPrompt(params.original_code, params.update_snippet);
+  const prompt = buildPrompt(params.source, params.instruction);
 
   // Call API with retry
   let rawResponse: string;
@@ -558,7 +558,7 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
 
   // Parse output with structure validation
   log('debug', "Parsing API response");
-  const result = parseOutput(rawResponse, params.original_code);
+  const result = parseOutput(rawResponse, params.source);
   
   if (result.success) {
     log('info', "Merge operation completed successfully");
@@ -580,24 +580,27 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "fa_merge",
     label: "Fast-Apply Merge",
-    description: "Merge code diffs using fast-apply models via OpenAI-compatible endpoints",
-    promptSnippet: "Merge update snippets into original code using AI models",
+    description: "Transform source code based on an instruction using fast-apply models, then apply it to a file with hash verification",
+    promptSnippet: "Generate and apply a code transformation based on a natural language instruction",
     promptGuidelines: [
-      "Use fa_merge when you need to merge code changes into an existing file efficiently",
+      "Use fa_merge when you want to describe a change in natural language and let the tool generate the replacement.",
+      "source must be the exact current content you want to transform (read it first).",
+      "instruction is a natural language description of the desired change.",
+      "anchor defaults to source — typically you don't need to specify it unless you want a different scope.",
     ],
     parameters: Type.Object({
-      original_code: Type.String({
-        description: "The complete original source code",
-      }),
-      update_snippet: Type.String({
-        description: "The code changes to apply",
-      }),
       file: Type.String({
         description: "Path to the file to edit",
       }),
-      anchor: Type.String({
-        description: "Exact text to match in the file. Must appear exactly once.",
+      source: Type.String({
+        description: "Current content to transform (must be exact)",
       }),
+      instruction: Type.String({
+        description: "Natural language description of the desired change",
+      }),
+      anchor: Type.Optional(Type.String({
+        description: "Exact text to match in the file (defaults to source). Must appear exactly once.",
+      })),
       endpoint_url: Type.Optional(
         Type.String({
           description: "The base URL of the OpenAI-compatible endpoint",
@@ -617,7 +620,7 @@ export default function (pi: ExtensionAPI) {
       });
       
       try {
-        // Validate file and anchor parameters (these are required for file operation)
+        // Validate file and source parameters
         if (!params.file || !params.file.trim()) {
           log('warn', "Validation failed: file parameter is missing");
           return {
@@ -631,13 +634,26 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        if (!params.anchor || !params.anchor.trim()) {
-          log('warn', "Validation failed: anchor parameter is missing");
+        if (!params.source || !params.source.trim()) {
+          log('warn', "Validation failed: source parameter is missing");
           return {
             content: [{ type: "text", text: JSON.stringify({
               success: false,
               error: "VALIDATION_ERROR",
-              details: "anchor parameter is required.",
+              details: "source parameter is required.",
+            }, null, 2) }],
+            isError: true,
+            details: {}
+          };
+        }
+
+        if (!params.instruction || !params.instruction.trim()) {
+          log('warn', "Validation failed: instruction parameter is missing");
+          return {
+            content: [{ type: "text", text: JSON.stringify({
+              success: false,
+              error: "VALIDATION_ERROR",
+              details: "instruction parameter is required.",
             }, null, 2) }],
             isError: true,
             details: {}
@@ -662,8 +678,20 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // Perform merge (validation of original_code and update_snippet is handled there)
-        const mergeResult = await performMerge(params as MergeParams, ctx as ExtensionContext);
+        // Use source as anchor if not specified
+        const anchor = params.anchor || params.source;
+        log('debug', `Using anchor: ${anchor.substring(0, 50)}...`);
+
+        // Perform merge (validation of source and instruction is handled there)
+        const mergeParams: MergeParams = {
+          file: params.file,
+          source: params.source,
+          instruction: params.instruction,
+          anchor: anchor,
+          endpoint_url: params.endpoint_url,
+          model_name: params.model_name,
+        };
+        const mergeResult = await performMerge(mergeParams, ctx as ExtensionContext);
         if (!mergeResult.success) {
           return {
             content: [{ type: "text", text: JSON.stringify(mergeResult, null, 2) }],
@@ -680,7 +708,7 @@ export default function (pi: ExtensionAPI) {
             [
               "apply",
               "--file", resolvedFilePath,
-              "--anchor", params.anchor,
+              "--anchor", anchor,
               "--replacement", mergeResult.updated_code
             ],
             { signal: _signal },
