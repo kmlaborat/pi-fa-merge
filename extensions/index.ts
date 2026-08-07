@@ -375,7 +375,7 @@ async function callOpenAiCompatibleApi(
   const url = `${endpointUrl}/chat/completions`;
 
   try {
-    log.debug(`Calling API: ${endpointUrl}, model: ${modelName}, timeout: ${timeoutMs}ms`);
+    log('debug', `Calling API: ${endpointUrl}, model: ${modelName}, timeout: ${timeoutMs}ms`);
     
     const response = await fetch(url, {
       method: "POST",
@@ -401,7 +401,7 @@ async function callOpenAiCompatibleApi(
     }
 
     const data = await response.json();
-    log.debug("API response received");
+    log('debug', "API response received");
     return data.choices[0].message.content;
   } finally {
     clearTimeout(timeout);
@@ -454,7 +454,7 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   const endpointUrl = params.endpoint_url || process.env.FAST_APPLY_ENDPOINT_URL || DEFAULT_ENDPOINT_URL;
   const modelName = params.model_name || process.env.FAST_APPLY_MODEL_NAME || DEFAULT_MODEL_NAME;
 
-  log.info("Starting merge operation", {
+  log('info', "Starting merge operation", {
     file: params.file,
     endpoint: endpointUrl,
     model: modelName,
@@ -462,7 +462,7 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
 
   // Validate inputs
   if (!params.original_code || !params.original_code.trim()) {
-    log.warn("Validation failed: original_code is empty");
+    log('warn', "Validation failed: original_code is empty");
     return {
       success: false,
       error: "VALIDATION_ERROR",
@@ -471,7 +471,7 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   }
 
   if (!params.update_snippet || !params.update_snippet.trim()) {
-    log.warn("Validation failed: update_snippet is empty");
+    log('warn', "Validation failed: update_snippet is empty");
     return {
       success: false,
       error: "VALIDATION_ERROR",
@@ -482,7 +482,7 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   // Get API key from environment
   const apiKey = process.env.FAST_APPLY_API_KEY;
   if (!apiKey) {
-    log.warn("FAST_APPLY_API_KEY environment variable is not set");
+    log('warn', "FAST_APPLY_API_KEY environment variable is not set");
     return {
       success: false,
       error: "PROVIDER_AUTH_FAILED",
@@ -493,7 +493,7 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   // Validate context length (estimated tokens = total chars / 4)
   const estimatedTokens = Math.floor((params.original_code.length + params.update_snippet.length) / 4);
   if (estimatedTokens > MAX_CONTEXT_TOKENS) {
-    log.warn(`Context length exceeded: ${estimatedTokens} tokens`);
+    log('warn', `Context length exceeded: ${estimatedTokens} tokens`);
     return {
       success: false,
       error: "CONTEXT_EXCEEDED",
@@ -505,7 +505,7 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   const lineCount = params.original_code.split('\n').length;
   const maxLines = getMaxCodeLines();
   if (lineCount > maxLines) {
-    log.warn(`File too large: ${lineCount} lines exceeds maximum of ${maxLines} lines`);
+    log('warn', `File too large: ${lineCount} lines exceeds maximum of ${maxLines} lines`);
     return {
       success: false,
       error: "VALIDATION_ERROR",
@@ -513,7 +513,7 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
     };
   }
 
-  log.debug(`Processing file with ${lineCount} lines, estimated ${estimatedTokens} tokens`);
+  log('debug', `Processing file with ${lineCount} lines, estimated ${estimatedTokens} tokens`);
 
   // Build prompt using kortix-ai/fast-apply tag structure
   const prompt = buildPrompt(params.original_code, params.update_snippet);
@@ -521,13 +521,13 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   // Call API with retry
   let rawResponse: string;
   try {
-    log.info("Calling API endpoint");
+    log('info', "Calling API endpoint");
     rawResponse = await withRetry(async () => {
       return callOpenAiCompatibleApi(endpointUrl, apiKey, modelName, prompt);
     });
-    log.info("API call successful");
+    log('info', "API call successful");
   } catch (error) {
-    log.error("API call failed", error);
+    log('error', "API call failed", error);
     if (error instanceof Error) {
       if (error.name === "AbortError") {
         return {
@@ -557,13 +557,13 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
   }
 
   // Parse output with structure validation
-  log.debug("Parsing API response");
+  log('debug', "Parsing API response");
   const result = parseOutput(rawResponse, params.original_code);
   
   if (result.success) {
-    log.info("Merge operation completed successfully");
+    log('info', "Merge operation completed successfully");
   } else {
-    log.error(`Merge operation failed: ${result.error}`);
+    log('error', `Merge operation failed: ${result.error}`);
   }
   
   return result;
@@ -611,7 +611,7 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      log.info("Tool execution started", {
+      log('info', "Tool execution started", {
         file: params.file,
         model: params.model_name,
       });
@@ -619,7 +619,7 @@ export default function (pi: ExtensionAPI) {
       try {
         // Validate file and anchor parameters (these are required for file operation)
         if (!params.file || !params.file.trim()) {
-          log.warn("Validation failed: file parameter is missing");
+          log('warn', "Validation failed: file parameter is missing");
           return {
             content: [{ type: "text", text: JSON.stringify({
               success: false,
@@ -627,11 +627,12 @@ export default function (pi: ExtensionAPI) {
               details: "file parameter is required.",
             }, null, 2) }],
             isError: true,
+            details: {}
           };
         }
 
         if (!params.anchor || !params.anchor.trim()) {
-          log.warn("Validation failed: anchor parameter is missing");
+          log('warn', "Validation failed: anchor parameter is missing");
           return {
             content: [{ type: "text", text: JSON.stringify({
               success: false,
@@ -639,16 +640,17 @@ export default function (pi: ExtensionAPI) {
               details: "anchor parameter is required.",
             }, null, 2) }],
             isError: true,
+            details: {}
           };
         }
 
         // Resolve file path
-        const resolvedFilePath = resolveFilePath(params.file, ctx.cwd);
-        log.debug(`Resolved file path: ${resolvedFilePath}`);
+        const resolvedFilePath = resolveFilePath(params.file || '', ctx.cwd);
+        log('debug', `Resolved file path: ${resolvedFilePath}`);
 
         // Check file exists
         if (!fs.existsSync(resolvedFilePath)) {
-          log.warn(`File not found: ${resolvedFilePath}`);
+          log('warn', `File not found: ${resolvedFilePath}`);
           return {
             content: [{ type: "text", text: JSON.stringify({
               success: false,
@@ -656,6 +658,7 @@ export default function (pi: ExtensionAPI) {
               details: `File not found: ${resolvedFilePath}`,
             }, null, 2) }],
             isError: true,
+            details: {}
           };
         }
 
@@ -665,11 +668,12 @@ export default function (pi: ExtensionAPI) {
           return {
             content: [{ type: "text", text: JSON.stringify(mergeResult, null, 2) }],
             isError: true,
+            details: {}
           };
         }
 
         // Apply edit using AnchorEdit with file mutation queue
-        log.info("Applying changes to file with AnchorEdit");
+        log('info', "Applying changes to file with AnchorEdit");
         return await withFileMutationQueue(resolvedFilePath, async () => {
           const execResult = await pi.exec(
             bin,
@@ -684,7 +688,7 @@ export default function (pi: ExtensionAPI) {
 
           if (execResult.code !== 0) {
             const output = execResult.stderr || execResult.stdout || "";
-            log.error(`AnchorEdit failed: ${output}`);
+            log('error', `AnchorEdit failed: ${output}`);
             
             if (output.includes("NO_MATCH")) {
               return {
@@ -694,6 +698,7 @@ export default function (pi: ExtensionAPI) {
                   details: "The anchor was not found in the file. Please read the file and revise the anchor.",
                 }, null, 2) }],
                 isError: true,
+                details: {}
               };
             }
             
@@ -705,6 +710,7 @@ export default function (pi: ExtensionAPI) {
                   details: "The anchor matched more than once. Use a more specific anchor.",
                 }, null, 2) }],
                 isError: true,
+                details: {}
               };
             }
             
@@ -716,6 +722,7 @@ export default function (pi: ExtensionAPI) {
                   details: "Hash mismatch detected. The file has been changed externally. Please re-read the file and try again.",
                 }, null, 2) }],
                 isError: true,
+                details: {}
               };
             }
             
@@ -726,16 +733,18 @@ export default function (pi: ExtensionAPI) {
                 details: output.trim(),
               }, null, 2) }],
               isError: true,
+              details: {}
             };
           }
 
-          log.info("File updated successfully");
+          log('info', "File updated successfully");
           return {
             content: [{ type: "text", text: execResult.stdout.trim() }],
+            details: {}
           };
         });
       } catch (error) {
-        log.error("Tool execution failed", error);
+        log('error', "Tool execution failed", error);
         const errorResult: MergeResult = {
           success: false,
           error: "EXECUTION_ERROR",
