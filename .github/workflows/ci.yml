@@ -56,7 +56,7 @@ jobs:
           echo "Checking for external dependencies..."
           
           # Check if package.json has dependencies
-          if grep -q '"dependencies".*[^}]' package.json; then
+          if grep -q '"dependencies":\s*{[^}]+[^}]*}' package.json; then
             echo "ERROR: package.json contains external dependencies"
             echo "SPEC §4 requires zero external dependencies (Node.js standard library only)"
             exit 1
