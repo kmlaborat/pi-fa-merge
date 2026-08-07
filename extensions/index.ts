@@ -578,12 +578,12 @@ export default function (pi: ExtensionAPI) {
 
   // Register the merge tool
   pi.registerTool({
-    name: "fast-apply-merge",
+    name: "fa_merge",
     label: "Fast-Apply Merge",
     description: "Merge code diffs using fast-apply models via OpenAI-compatible endpoints",
     promptSnippet: "Merge update snippets into original code using AI models",
     promptGuidelines: [
-      "Use fast-apply-merge when you need to merge code changes into an existing file efficiently",
+      "Use fa_merge when you need to merge code changes into an existing file efficiently",
     ],
     parameters: Type.Object({
       original_code: Type.String({

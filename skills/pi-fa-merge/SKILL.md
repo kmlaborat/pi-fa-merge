@@ -48,10 +48,10 @@ export ANCHOREDIT_BIN="anchoredit"
 
 ### Using the Fast-Apply Merge Tool
 
-The package provides a `fast-apply-merge` tool that can be called directly:
+The package provides a `fa_merge` tool that can be called directly:
 
 ```
-fast-apply-merge({
+fa_merge({
   original_code: "def hello():\n    return 'world'",
   update_snippet: "def hello():\n    return 'universe'",
   file: "/path/to/target/file.py",
@@ -111,8 +111,8 @@ update = """
         return a - b
 """
 
-# Call fast-apply-merge - file is directly updated
-result = fast-apply-merge({
+# Call fa_merge - file is directly updated
+result = fa_merge({
     "original_code": original,
     "update_snippet": update,
     "file": "/path/to/calculator.py",
@@ -125,7 +125,7 @@ result = fast-apply-merge({
 For complete file replacement, use the entire file content as the anchor:
 
 ```python
-result = fast-apply-merge({
+result = fa_merge({
     "original_code": entire_file_content,
     "update_snippet": new_content,
     "file": "/path/to/file.py",

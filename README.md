@@ -82,7 +82,7 @@ ANCHOREDIT_BIN="anchoredit"
 ### Using the Tool
 
 ```typescript
-fast-apply-merge({
+fa_merge({
   original_code: "// original code here",
   update_snippet: "// changes to apply",
   file: "/path/to/target/file.py",
@@ -127,7 +127,7 @@ def get_version():
 """
 
 # Result - file is directly updated
-result = fast-apply-merge({
+result = fa_merge({
     "original_code": original,
     "update_snippet": update,
     "file": "/path/to/calculator.py",
@@ -145,7 +145,7 @@ result = fast-apply-merge({
 
 ```python
 # Replace entire file content
-result = fast-apply-merge({
+result = fa_merge({
     "original_code": entire_file_content,
     "update_snippet": new_functionality,
     "file": "/path/to/file.py",
