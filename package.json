@@ -3,6 +3,9 @@
   "version": "2.0.0",
   "description": "Fast-apply merge tool based on kortix-ai/fast-apply specification, supporting custom OpenAI-compatible endpoints for AI agents to merge code diffs at high speed with low token cost and write directly to files",
   "keywords": ["pi-package"],
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "main": "extensions/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",

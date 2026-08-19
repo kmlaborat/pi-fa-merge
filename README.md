@@ -20,6 +20,7 @@ This tool supports **any OpenAI-compatible endpoint** serving fast-apply models,
 
 ## Prerequisites
 
+- Node.js >= 22.19.0 (required by `@earendil-works/pi-coding-agent`)
 - [pi-anchoredit](https://github.com/kmlaborat/pi-anchoredit) - Required for file write operations
 - `anchoredit` binary must be accessible in PATH or configured via `ANCHOREDIT_BIN` environment variable
 

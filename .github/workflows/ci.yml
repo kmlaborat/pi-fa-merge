@@ -18,7 +18,8 @@ jobs:
           - os: macos-latest
           - os: windows-latest
     env:
-      NODE_VERSION: '20'
+      # @earendil-works/pi-coding-agent (peer dependency) requires >=22.19.0
+      NODE_VERSION: '22'
 
     steps:
       - name: Checkout
@@ -100,6 +101,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - run: npm ci
       - run: npm run lint || echo "Lint warnings (non-blocking)"
