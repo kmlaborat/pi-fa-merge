@@ -6,7 +6,7 @@
   "main": "extensions/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --config=vitest.config.ts",
+    "test": "vitest run --config=vitest.config.mts",
     "lint": "echo 'No linting configured yet' && exit 0"
   },
   "dependencies": {},

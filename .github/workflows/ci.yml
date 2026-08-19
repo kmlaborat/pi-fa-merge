@@ -55,12 +55,17 @@ jobs:
           echo "=== SPEC Compliance Check ==="
           echo "Checking for external dependencies..."
           
-          # Check if package.json has dependencies
-          if grep -q '"dependencies":\s*{[^}]+[^}]*}' package.json; then
-            echo "ERROR: package.json contains external dependencies"
-            echo "SPEC §4 requires zero external dependencies (Node.js standard library only)"
-            exit 1
-          fi
+          # Check if package.json has runtime dependencies (JSON parse,
+          # robust to any formatting)
+          node -e "
+            const pkg = require('./package.json');
+            const deps = Object.keys(pkg.dependencies || {});
+            if (deps.length > 0) {
+              console.error('ERROR: package.json contains runtime dependencies: ' + deps.join(', '));
+              console.error('SPEC §4 requires zero external dependencies (Node.js standard library only)');
+              process.exit(1);
+            }
+          "
           
           echo "✓ No external dependencies in package.json"
           

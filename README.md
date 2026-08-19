@@ -188,7 +188,7 @@ This project uses GitHub Actions for continuous integration. The CI workflow run
 - Type checking with TypeScript
 - SPEC compliance verification
 - Cross-platform testing
-- Linting
+- Linting (placeholder, non-blocking)
 
 ## License
 

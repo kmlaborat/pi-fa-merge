@@ -20,6 +20,7 @@ import {
   callOpenAiCompatibleApi,
   getMaxCodeLines,
   getRequestTimeoutMs,
+  ApiError,
 } from '../extensions/index';
 import {
   setupTestFixtures,
@@ -286,15 +287,27 @@ def f():
   });
 
   describe('isRetryable', () => {
-    test.each(['429', '500', '502', '503', '504'])(
-      'retries on status %s',
+    test.each([429, 500, 502, 503, 504])(
+      'retries on HTTP status %s',
       (status) => {
-        expect(isRetryable(new Error(`API error: ${status} Bad`))).toBe(true);
+        expect(isRetryable(new ApiError(status, `${status} Bad`))).toBe(true);
       },
     );
 
-    test.each(['401', '403', '404'])('does not retry on status %s', (status) => {
-      expect(isRetryable(new Error(`API error: ${status} Bad`))).toBe(false);
+    test.each([400, 401, 403, 404, 418])(
+      'does not retry on HTTP status %s',
+      (status) => {
+        expect(isRetryable(new ApiError(status, `${status} Bad`))).toBe(false);
+      },
+    );
+
+    test('does not retry based on message text (no substring matching)', () => {
+      // "5000" contains "500" — must NOT be treated as a 500 error
+      expect(isRetryable(new Error('timed out after 5000ms'))).toBe(false);
+      // Status-looking text in the message alone must not trigger retry
+      expect(
+        isRetryable(new Error('API error: 429 Too Many Requests')),
+      ).toBe(false);
     });
 
     test('does not retry on non-Error values', () => {
@@ -479,10 +492,11 @@ def f():
         { length: 501 },
         (_, i) => `# line ${i}`,
       ).join('\n');
-      const result = await performMerge(
-        { file: '/tmp/unused.py', source, instruction: 'noop' },
-        {} as never,
-      );
+      const result = await performMerge({
+        file: '/tmp/unused.py',
+        source,
+        instruction: 'noop',
+      });
       expect(result.success).toBe(false);
       expect(result.error).toBe('FILE_TOO_LARGE');
     });
@@ -490,10 +504,11 @@ def f():
     test('PROVIDER_AUTH_FAILED when API key is missing', async () => {
       delete process.env.FAST_APPLY_API_KEY;
       try {
-        const result = await performMerge(
-          { file: '/tmp/unused.py', source: 'x = 1', instruction: 'noop' },
-          {} as never,
-        );
+        const result = await performMerge({
+          file: '/tmp/unused.py',
+          source: 'x = 1',
+          instruction: 'noop',
+        });
         expect(result.success).toBe(false);
         expect(result.error).toBe('PROVIDER_AUTH_FAILED');
       } finally {

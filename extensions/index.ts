@@ -13,7 +13,7 @@
  * @package pi-fa-merge
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import * as fs from "fs";
@@ -123,7 +123,6 @@ const DEFAULT_ENDPOINT_URL = "https://api.fireworks.ai/inference/v1";
 const DEFAULT_MODEL_NAME = "fast-apply-7b";
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY_MS = 1000;
-const REQUEST_TIMEOUT_MS = 60000;
 const MAX_CONTEXT_TOKENS = 8192;
 
 // Configurable via environment variables
@@ -335,7 +334,7 @@ export function validateStructure(source: string, updatedCode: string): Structur
   // Check function/class preservation
   if (originalFunctions) {
     for (const fn of originalFunctions) {
-      const fnName = fn.split(/\s+/).pop();
+      const fnName = fn.split(/\s+/).pop() ?? fn;
       if (!updatedCode.includes(fnName)) {
         return {
           valid: false,
@@ -448,6 +447,20 @@ export function parseOutput(rawResponse: string, source: string): MergeResult {
 // Uses the standard Chat Completions API format.
 // ============================================================================
 
+/**
+ * Error for non-2xx API responses, carrying the HTTP status code so retry
+ * logic can decide based on the status instead of message text matching.
+ */
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string
+  ) {
+    super(`API error: ${message}`);
+    this.name = "ApiError";
+  }
+}
+
 export async function callOpenAiCompatibleApi(
   endpointUrl: string,
   apiKey: string,
@@ -477,7 +490,7 @@ export async function callOpenAiCompatibleApi(
     });
 
     if (!response.ok) {
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
+      throw new ApiError(response.status, `${response.status} ${response.statusText}`);
     }
 
     const data = await response.json();
@@ -521,13 +534,10 @@ async function withRetry<T>(operation: () => Promise<T>): Promise<T> {
 
 export function isRetryable(error: unknown): boolean {
   if (error instanceof Error) {
-    return (
-      error.message.includes("429") ||
-      error.message.includes("500") ||
-      error.message.includes("502") ||
-      error.message.includes("503") ||
-      error.message.includes("504")
-    );
+    const status = (error as { status?: unknown }).status;
+    if (typeof status === "number") {
+      return status === 429 || (status >= 500 && status <= 599);
+    }
   }
   return false;
 }
@@ -536,7 +546,7 @@ export function isRetryable(error: unknown): boolean {
 // Merge Operation
 // ============================================================================
 
-export async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise<MergeResult> {
+export async function performMerge(params: MergeParams): Promise<MergeResult> {
   const endpointUrl = params.endpoint_url || process.env.FAST_APPLY_ENDPOINT_URL || DEFAULT_ENDPOINT_URL;
   const modelName = params.model_name || process.env.FAST_APPLY_MODEL_NAME || DEFAULT_MODEL_NAME;
 
@@ -777,7 +787,7 @@ export default function (pi: ExtensionAPI) {
           endpoint_url: params.endpoint_url,
           model_name: params.model_name,
         };
-        const mergeResult = await performMerge(mergeParams, ctx as ExtensionContext);
+        const mergeResult = await performMerge(mergeParams);
         if (!mergeResult.success) {
           return {
             content: [{ type: "text", text: JSON.stringify(mergeResult, null, 2) }],
@@ -904,7 +914,4 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.notify("pi-fa-merge: Fast-apply merge tool loaded", "info");
   });
 
-  pi.on("session_shutdown", async (_event, _ctx) => {
-    // Cleanup if needed
-  });
 }
