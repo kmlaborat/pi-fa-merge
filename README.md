@@ -9,7 +9,7 @@ This tool supports **any OpenAI-compatible endpoint** serving fast-apply models,
 - **fast-apply compliant**: Optimized for the `kortix-ai/fast-apply` prompt format and dedicated models, maximizing LLM performance.
 - **OpenAI-compatible**: Connects to any OpenAI-compatible API endpoint serving fast-apply models.
 - **High speed**: Uses fast-apply models for rapid code transformation
-- **Low token cost**: Avoids full file regeneration
+- **Low token cost**: The agent describes the change instead of regenerating the code itself
 - **Deterministic**: Temperature 0 ensures consistent results
 - **Retry support**: Automatic exponential backoff for rate limits
 - **Direct file write**: Writes transformed code directly to target file with hash-verified scope matching
@@ -150,11 +150,12 @@ result = fa_merge({
 
 | Error | Description |
 |-------|-------------|
-| `VALIDATION_ERROR` | Input validation failed (empty or invalid parameters, source too large) |
+| `VALIDATION_ERROR` | Input validation failed (empty or invalid parameters) |
 | `PROVIDER_AUTH_FAILED` | API authentication failed or API key not configured |
 | `TIMEOUT` | Request timed out waiting for response (default: 60 seconds) |
 | `MALFORMED_OUTPUT` | Model output couldn't be parsed or missing required tags |
 | `CONTEXT_EXCEEDED` | Input exceeds maximum context length (8192 estimated tokens) |
+| `FILE_TOO_LARGE` | Source exceeds maximum line count (default: 500 lines, configurable via `FAST_APPLY_MAX_LINES`) |
 | `STRUCTURE_MANGLE_ERROR` | Transformed code lost critical structure from source code |
 | **`ANCHOREDIT_NO_MATCH`** | **Anchor was not found in the file** |
 | **`ANCHOREDIT_MULTIPLE`** | **Anchor matched more than once in the file** |

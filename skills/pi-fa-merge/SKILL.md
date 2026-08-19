@@ -156,11 +156,12 @@ You can override these by setting environment variables or passing parameters di
 
 | Error | Description |
 |-------|-------------|
-| `VALIDATION_ERROR` | Input validation failed (empty or invalid parameters, source too large) |
+| `VALIDATION_ERROR` | Input validation failed (empty or invalid parameters) |
 | `PROVIDER_AUTH_FAILED` | API authentication failed or API key not configured |
 | `TIMEOUT` | Request timed out waiting for response (default: 60 seconds) |
 | `MALFORMED_OUTPUT` | Model output couldn't be parsed or missing required tags |
 | `CONTEXT_EXCEEDED` | Input exceeds maximum context length (8192 estimated tokens) |
+| `FILE_TOO_LARGE` | Source exceeds maximum line count (default: 500 lines, configurable via `FAST_APPLY_MAX_LINES`) |
 | `STRUCTURE_MANGLE_ERROR` | Transformed code lost critical structure from source code |
 | **`ANCHOREDIT_NO_MATCH`** | **Anchor was not found in the file** |
 | **`ANCHOREDIT_MULTIPLE`** | **Anchor matched more than once in the file** |

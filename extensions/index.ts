@@ -1,8 +1,9 @@
 /**
  * pi-fa-merge: Fast-apply merge tool for AI coding agents
  *
- * Merges partial code diffs (update_snippets) into original source code
- * using any OpenAI-compatible endpoint serving fast-apply models.
+ * Transforms source code based on natural language instructions using any
+ * OpenAI-compatible endpoint serving fast-apply models, and writes the
+ * transformed code to the file with hash-verified scope matching.
  *
  * This package implements the **kortix-ai/fast-apply** specification
  * (https://github.com/kortix-ai/fast-apply), which defines the tag-based
