@@ -75,6 +75,8 @@ ANCHOREDIT_BIN="anchoredit"
 # FAST_APPLY_TIMEOUT=60000
 ```
 
+> **Local-model note:** a local `fast-apply-7b` (e.g. served over a tailnet) can take 60–130s for inputs of 4k+ tokens, so the default 60s timeout will report `TIMEOUT` on large sources. Set `FAST_APPLY_TIMEOUT=180000` (or higher) when running against a local/slow endpoint. Cloud endpoints are fast enough to keep the default.
+
 **Note**: The `.env` file is not included in the repository. A template file `.env.example` is provided for reference.
 
 **`.env` loading rules**

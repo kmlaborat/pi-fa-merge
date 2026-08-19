@@ -66,7 +66,7 @@ On success, the package guarantees a JSON object or serialized output with the f
   * Function/class names are preserved
   * Import/require statements are preserved
   * Code line count does not decrease by more than 50%
-  * The first 20% of the original code prefix is preserved (for files > 5 lines)
+  * At least half of the non-empty lines in the first 20% of the original code (minimum 5 lines) are still present in the merged output, compared line-by-line after trimming (for files > 5 lines). Presence-based rather than byte-exact: legitimate updates that touch the file head (added imports, changed signatures, new shebang/docstring) must not fail validation.
   * If validation fails, the operation returns `success: false` with error `STRUCTURE_MANGLE_ERROR`
 
 ### 4. Constraints & Invariants
@@ -121,7 +121,7 @@ Expected failure patterns and system behavior.
 | **Tag Not Found Error** | Return `success: false, error: "MALFORMED_OUTPUT"`. Prevents the critical bug of overwriting files with raw output. |
 | **Context Length Exceeded** | If the estimated token count (calculated from total character count divided by 4) exceeds 8192 tokens, immediately raise a `CONTEXT_EXCEEDED` error. |
 | **File Too Large** | If the input file exceeds the maximum line count (default: 500 lines), immediately raise a `FILE_TOO_LARGE` error. |
-| **Structure Mangle Error** | If the merged code loses critical structure (function names, imports, >50% lines lost, or prefix lost), return `success: false, error: "STRUCTURE_MANGLE_ERROR"` with details indicating what was lost. |
+| **Structure Mangle Error** | If the merged code loses critical structure (function names, imports, >50% lines lost, or >50% of the head-prefix lines lost), return `success: false, error: "STRUCTURE_MANGLE_ERROR"` with details indicating what was lost. |
 | **Anchor Not Found** | Return `success: false, error: "ANCHOREDIT_NO_MATCH"`. Indicates the anchor text doesn't exist in the file. |
 | **Multiple Anchor Matches** | Return `success: false, error: "ANCHOREDIT_MULTIPLE"`. Indicates the anchor text appears more than once. |
 | **Hash Mismatch** | Return `success: false, error: "ANCHOREDIT_HASH_MISMATCH"`. Indicates the file was modified externally. |

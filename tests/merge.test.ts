@@ -255,7 +255,7 @@ def f():
       expect(result.details).toContain('lost too many lines');
     });
 
-    test('detects lost prefix for files longer than 5 lines', () => {
+    test('detects mostly-lost prefix for files longer than 5 lines', () => {
       const sourceLines = [
         'def f():',
         '    x = 1',
@@ -268,12 +268,63 @@ def f():
       ];
       expect(sourceLines.length).toBeGreaterThan(5);
       const source = sourceLines.join('\n');
-      // Keeps function f and all lines, but adds a header at the top
-      const updated = `# new header\n` + source;
+      // Keeps function f and the line count, but replaces most of the
+      // prefix lines (x..v) with different content -> <50% of the
+      // non-empty prefix lines survive.
+      const mangledLines = [
+        'def f():',
+        '    a = 1',
+        '    b = 2',
+        '    c = 3',
+        '    d = 4',
+        '    e = 5',
+        ...Array.from({ length: 22 }, (_, i) => `    t${i} = ${i}`),
+        '    return x',
+      ];
 
-      const result = validateStructure(source, updated);
+      const result = validateStructure(source, mangledLines.join('\n'));
       expect(result.valid).toBe(false);
       expect(result.details).toContain('prefix');
+    });
+
+    test('accepts a legitimate head edit (import added at the top)', () => {
+      // Regression: the old startsWith-based prefix check rejected
+      // byte-correct merges whenever the update legitimately touched the
+      // file head (measured 5/20 false positives on the baseline).
+      const sourceLines = [
+        'import os',
+        '',
+        'def f():',
+        '    return os.getpid()',
+        '',
+        ...Array.from({ length: 6 }, (_, i) => `# note ${i}`),
+      ];
+      const source = sourceLines.join('\n');
+      const updated = `import sys\n` + source;
+
+      expect(validateStructure(source, updated)).toEqual({ valid: true });
+    });
+
+    test('accepts a changed signature line in the prefix (partial line loss)', () => {
+      // Regression: baseline case 12 - a legitimately changed signature
+      // line drops one of four prefix lines (75% present) and must pass.
+      const source = [
+        "import React from 'react'",
+        '',
+        'function LinkIcon({ width, height, color }) {',
+        '  return (',
+        '    <svg',
+        ...Array.from({ length: 20 }, (_, i) => `      <line ${i} />`),
+        '    </svg>',
+        '  );',
+        '}',
+      ].join('\n');
+      const updated = source.replace(
+        'function LinkIcon({ width, height, color }) {',
+        'function LinkIcon({ width, height, color, className }) {'
+      );
+
+      expect(validateStructure(source, updated)).toEqual({ valid: true });
     });
 
     test('skips prefix check for very small files (5 lines or less)', () => {

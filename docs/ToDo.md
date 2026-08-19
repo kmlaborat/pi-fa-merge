@@ -3,7 +3,7 @@
 | 項目 | 内容 |
 |------|------|
 | 更新日 | 2026-08-20 |
-| 最新コミット | ToDo 1(実測ベースライン)完了コミット群。最新は `git log -3` で確認 |
+| 最新コミット | ToDo 2.5(validateStructure 誤爆修正)完了コミットまで。最新は `git log -3` で確認 |
 | リポジトリ | `C:\Users\Game\MyDevEnv\wd\pi-fa-merge`(リモート: github.com/kmlaborat/pi-fa-merge) |
 | インストール先 | `C:\Users\Game\MyDevEnv\.home\.pi\agent\git\github.com\kmlaborat\pi-fa-merge`(`9549fe2` まで pull 済み、`.env` は存在) |
 | 前提PJ | `C:\Users\Game\MyDevEnv\wd\AnchorScope` / `AnchorEdit`(v2、`main` clean。AnchorScope はライブラリ依存。`anchoredit` バイナリ v2.0.0 はインストール済み — 修正なければ再 `cargo install` 不要) |
@@ -55,7 +55,7 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 | `7978738` | CI Node 20→22(pi-coding-agent が >=22.19 を要求) |
 | `9549fe2` | `.env` ロードの pi-fc-search 整合 + `/reload-env` 追加(→ 次コミットで `reload-fa-env` に改名) |
 | `06b43eb` | `/reload-fa-env` 改名 + この文書追加 |
-| (本セッション) | ① 純粋コアを `extensions/core.ts` に抽出(pi 非依存化。index.ts は re-export で後方互換、59 テスト維持) ② 評価ハーネス `harness/` 新設 + **実測ベースライン実行**(20 件、結果 `harness/results/baseline-2026-08-19.md`) ③ e2e(anchoredit 書き込み)確認完了 |
+| (本セッション) | ① 純粋コアを `extensions/core.ts` に抽出(pi 非依存化。index.ts は re-export で後方互換、59 テスト維持) ② 評価ハーネス `harness/` 新設 + **実測ベースライン実行**(20 件、結果 `harness/results/baseline-2026-08-19.md`) ③ e2e(anchoredit 書き込み)確認完了 ④ **validateStructure 誤爆修正**(prefix `startsWith` → 50% 存在チェック、テスト 61 件、再実行で誤爆 0/20 を確認) ⑤ README タイムアウト推奨追記 |
 
 ## 実測ベースラインの結果サマリ(詳細: `harness/results/baseline-2026-08-19.md`)
 
@@ -63,9 +63,10 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 - モデル: FastApply-7B(ローカル OpenAI 互換エンドポイント。実 `.env`)。
 - **完全一致 13/20 (65%)、sim≥0.95 まで 16/20 (80%)、MALFORMED 0 件**。
 - 実モデルエラー 4/20(挿入欠落・別関数本体生成・コメント削除)。`... existing code ...` 省略と 4k tok 超の入力で相関。
-- **`validateStructure` の prefix 必須チェックが誤爆 5/20 (25%)** — 先頭(import 等)を正当に変更するケースで `startsWith` 検証が誤って失敗し、GT と完全一致の出力を `STRUCTURE_MANGLE_ERROR` で拒否。pipeline 成功率を 80%→55% に圧縮。**ToDo 4 が最優先に昇格**。
-- ローカルモデルは 4k tok 超で 60〜130s → `FAST_APPLY_TIMEOUT` 既定 60s では TIMEOUT 7/20。ローカル運用は 180s+ 推奨。
-- 自然言語 A/B(次項)の比較基準 = 上記数値。
+- **`validateStructure` の prefix 必須チェックが誤爆 5/20 (25%)** — 先頭(import 等)を正当に変更するケースで `startsWith` 検証が誤って失敗し、GT と完全一致の出力を `STRUCTURE_MANGLE_ERROR` で拒否。pipeline 成功率を 80%→55% に圧縮。
+- ローカルモデルは 4k tok 超で 60〜130s → `FAST_APPLY_TIMEOUT` 既定 60s では TIMEOUT 7/20。ローカル運用は 180s+ 推奨(README に追記済み)。
+- 自然言語 A/B(次項)の比較基準 = 上記数値(モデルレベルは 2.5 修正で不変)。
+- **2.5 修正後の再実行**(同一 20 件、`harness/results/2026-08-19T22-53-44-539Z/`): 誤爆 **0/20**、pipeline 成功率 **19/20 (95%)**、正当拒否 1 件のみ(case 18: docstring 削除)。詳細はベースライン報告書の「修正後検証」節。
 
 ## 次のやること(優先度順)
 
@@ -88,10 +89,11 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 - 精度劣化を定量 → 「自然言語サポートを入れる/入れない/オプションにする」を判断
 - 参考: fast-apply はコードスニペットでファインチューニングされており、自然言語は**分布外**。劣化が大きいなら fast-apply 維持が合理的
 
-### 2.5. validateStructure の誤爆修正(実測で最優先に昇格 ⭐)
-- prefix 必須チェック(先頭 20% の `startsWith`)がファイル先頭の正当な変更(import 追加等)で誤爆 5/20。出力は GT とバイト一致なのに拒否。
-- 修正案: prefix の「存在」チェック(各 prefix 行が updatedCode に含まれるか)へ置き換え、または先頭 N 行のみ緩く。59 単体テスト + ベースライン再実行で回帰確認。
-- 修正で pipeline 成功率 55% → 80% 回復見込み。
+### 2.5. ~~validateStructure の誤爆修正~~ — **完了 (2026-08-20)** ⭐
+- 実測データで閾値を設計: 誤爆 5 件の prefix 行存在率は 75〜100%、実エラー(docstring 削除)は 0% → **`startsWith` を「非空 prefix 行の 50% 以上が出力に(行トリムして)存在」に緩和**(`extensions/core.ts`)。
+- 単体テスト 59→61 件(正当な先頭編集・署名変更を受理する回帰テスト 2 件追加)。SPEC.md の検証記述も同期。
+- **同一 20 件の再実行で検証**: 誤爆 0/20(従来 5/20)、pipeline 成功率 19/20 (95%)、正当拒否は case 18 のみ。case 9/14(中間欠落・別関数生成)は存在率 100% で検出不能(構造検証の役割は「壊滅的 mangling ガード」に収束)。
+- 副次対応: README に「ローカルモデル運用は `FAST_APPLY_TIMEOUT=180000`+ 推奨」を追記。
 
 ### 3. リリース準備(破壊的変更)
 - `source`/`instruction` → `original_code`/`update_snippet` は破壊的 → version `2.0.0` → **`3.0.0`** + git tag

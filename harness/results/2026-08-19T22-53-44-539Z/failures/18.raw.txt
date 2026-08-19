@@ -1,0 +1,17 @@
+<updated-code>import React from 'react';
+
+const FontsZh = () => {
+  React.useEffect(() => {
+    const link = document.createElement('link');
+    link.href = '/public/fonts/fonts-zh.css';
+    link.rel = 'stylesheet';
+    document.head.appendChild(link);
+    return () => {
+      document.head.removeChild(link);
+    };
+  }, []);
+
+  return null;
+};
+
+export default FontsZh;</updated-code>

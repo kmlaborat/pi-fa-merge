@@ -164,22 +164,43 @@ export function validateStructure(source: string, updatedCode: string): Structur
     };
   }
   
-  // Check prefix preservation (first 20% of source code should be present)
-  // Skip for very small files (5 lines or less) to avoid false positives
+  // Check prefix preservation (first 20% of source code should be present).
+  // Skip for very small files (5 lines or less) to avoid false positives.
+  //
+  // Presence-based (not startsWith): a legitimate update frequently touches
+  // the file head (added imports, changed signatures, new shebang/docstring),
+  // which made the byte-exact startsWith check reject byte-correct merges.
+  // The measured baseline (harness/results/baseline-2026-08-19.md) showed a
+  // 5/20 false-positive rate with startsWith while the genuine head-mangling
+  // cases lost ~100% of the prefix lines. Requiring at least half of the
+  // non-empty prefix lines to survive verbatim still catches catastrophic
+  // head mangling without rejecting correct merges.
   const sourceLinesList = source.split('\n');
-  
+
   if (sourceLinesList.length > 5) {
     const prefixLength = Math.max(5, Math.floor(sourceLinesList.length * 0.2));
-    const sourcePrefix = sourceLinesList.slice(0, prefixLength).join('\n').trim();
-    
-    if (sourcePrefix && !updatedCode.startsWith(sourcePrefix)) {
-      return {
-        valid: false,
-        details: `Critical error: Source code prefix was lost. Expected first ${prefixLength} lines to be preserved but they were not found in the transformed code.`
-      };
+    const prefixLines = sourceLinesList
+      .slice(0, prefixLength)
+      .map((line) => line.trim())
+      .filter((line) => line !== '');
+
+    if (prefixLines.length > 0) {
+      const outputLines = new Set(
+        updatedCode.split('\n').map((line) => line.trim())
+      );
+      let present = 0;
+      for (const line of prefixLines) {
+        if (outputLines.has(line)) present++;
+      }
+      if (present * 2 < prefixLines.length) {
+        return {
+          valid: false,
+          details: `Critical error: Source code prefix was mostly lost. Only ${present} of the first ${prefixLines.length} non-empty lines are present in the transformed code.`
+        };
+      }
     }
   }
-  
+
   return { valid: true };
 }
 
