@@ -37,6 +37,16 @@ The `update_snippet` follows the kortix-ai/fast-apply data format (the format th
 * `FAST_APPLY_MAX_LINES`: Optional. Maximum number of lines allowed for input files. Defaults to `500`.
 * `FAST_APPLY_TIMEOUT`: Optional. Request timeout in milliseconds. Defaults to `60000` (60 seconds).
 
+**.env Loading and /reload-env**
+
+The package loads its configuration from a `.env` file at the package root:
+
+* Only keys with the `FAST_APPLY_` or `ANCHOREDIT_` prefix are loaded; other keys are ignored with a warning (prevents a `.env` line such as `PATH=...` from hijacking the host pi process).
+* The package `.env` is the **single source of truth**: its values override variables already present in the process environment (the reverse of standard dotenv precedence). Stale shell/CI exports must not shadow what the user configured in the `.env`.
+* The initial load happens at extension startup; the **`/reload-env`** slash command re-reads the file at runtime without restarting pi. Because configuration is resolved per `fa_merge` call from the process environment, reloaded values take effect on the next call. It also serves as the recovery path when the process environment has been modified by mistake.
+* Keys removed from the `.env` file are not removed from the process environment (the loader only writes); restarting pi clears them.
+* A missing or unreadable `.env` never breaks the tool; it is reported instead.
+
 ### 3. Outputs
 
 On success, the package guarantees a JSON object or serialized output with the following structure:

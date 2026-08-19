@@ -77,6 +77,12 @@ ANCHOREDIT_BIN="anchoredit"
 
 **Note**: The `.env` file is not included in the repository. A template file `.env.example` is provided for reference.
 
+**`.env` loading rules**
+
+- Only `FAST_APPLY_*` and `ANCHOREDIT_*` keys are loaded from `.env` (other keys are ignored with a warning).
+- The package `.env` is the **single source of truth**: its values override variables already set in the environment.
+- Use the **`/reload-env`** slash command to re-read `.env` without restarting pi. Changes take effect on the next `fa_merge` call — it is also the recovery path if the process environment was modified by mistake.
+
 ## Usage
 
 ### Using the Tool

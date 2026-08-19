@@ -20,57 +20,17 @@ import * as fs from "fs";
 import * as os from "os";
 import * as crypto from "crypto";
 import * as path from "path";
+import { loadEnvFile, reloadEnvFile } from "./env";
 
 // ============================================================================
-// .env File Loader
+// .env Loader (see env.ts — aligned with pi-fc-search's design)
+//
+// Only FAST_APPLY_* / ANCHOREDIT_* keys are loaded, and the package .env
+// overrides the process environment (single source of truth). Re-apply at
+// runtime with the /reload-env command (registered in the factory below).
 // ============================================================================
 
-function loadEnvFile(): void {
-  try {
-    // Try to find .env file in package directory
-    const possiblePaths = [
-      path.join(process.cwd(), '.env'),
-      path.join(__dirname, '..', '.env'),
-      path.join(__dirname, '.env'),
-    ];
-
-    for (const envPath of possiblePaths) {
-      if (fs.existsSync(envPath)) {
-        const content = fs.readFileSync(envPath, 'utf-8');
-        const lines = content.split('\n');
-        
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith('#')) continue;
-          
-          const eqIndex = trimmed.indexOf('=');
-          if (eqIndex === -1) continue;
-          
-          const key = trimmed.substring(0, eqIndex).trim();
-          let value = trimmed.substring(eqIndex + 1).trim();
-          
-          // Remove surrounding quotes if present
-          if ((value.startsWith('"') && value.endsWith('"')) || 
-              (value.startsWith("'") && value.endsWith("'"))) {
-            value = value.slice(1, -1);
-          }
-          
-          // Do not override variables already set in the environment
-          if (process.env[key] === undefined) {
-            process.env[key] = value;
-          }
-        }
-        
-        return; // Found and loaded .env file
-      }
-    }
-  } catch (error) {
-    // Silently fail - environment variables might be set externally
-    console.log(`[pi-fa-merge] Warning: Could not load .env file: ${error}`);
-  }
-}
-
-// Load environment variables from .env file at module initialization
+// Load environment variables from the package .env at module initialization
 loadEnvFile();
 
 // ============================================================================
@@ -667,7 +627,51 @@ export async function performMerge(params: MergeParams): Promise<MergeResult> {
 // ============================================================================
 
 export default function (pi: ExtensionAPI) {
-  const bin = getAnchorEditBin();
+  // Re-read the package .env at runtime. Configuration is resolved per
+  // fa_merge call from process.env, so re-applying the file's
+  // FAST_APPLY_*/ANCHOREDIT_* keys makes edits take effect on the NEXT
+  // call — no pi restart needed. This is also the recovery path when the
+  // process environment has been modified by mistake.
+  // (Aligned with pi-fc-search's /reload-env command.)
+  pi.registerCommand("reload-env", {
+    description: "Re-read pi-fa-merge/.env without restarting pi (applies FAST_APPLY_* / ANCHOREDIT_* to the next fa_merge call)",
+    handler: async (_args, ctx) => {
+      const result = reloadEnvFile();
+
+      if (!result.found) {
+        ctx.ui.notify(
+          `pi-fa-merge: no .env found at ${result.envPath} — nothing reloaded. ` +
+          `Shell FAST_APPLY_* variables (if any) remain in effect.`,
+          "warning"
+        );
+        return;
+      }
+
+      if (result.appliedKeys.length === 0) {
+        ctx.ui.notify(
+          `pi-fa-merge: .env reloaded (${result.envPath}) but contains no FAST_APPLY_* / ANCHOREDIT_* keys.`,
+          "info"
+        );
+      } else {
+        ctx.ui.notify(
+          `pi-fa-merge: .env reloaded — applied ${result.appliedKeys.join(", ")}. ` +
+          `Now effective: endpoint=${process.env.FAST_APPLY_ENDPOINT_URL || "(default)"} ` +
+          `model=${process.env.FAST_APPLY_MODEL_NAME || "(default)"} ` +
+          `maxLines=${process.env.FAST_APPLY_MAX_LINES || "(500)"} ` +
+          `timeout=${process.env.FAST_APPLY_TIMEOUT || "(60000)"}ms. ` +
+          `Takes effect on the next fa_merge call (no restart needed).`,
+          "info"
+        );
+      }
+
+      if (result.ignoredKeys.length > 0) {
+        ctx.ui.notify(
+          `pi-fa-merge: ignored non-FAST_APPLY_*/ANCHOREDIT_* key(s) in .env: ${result.ignoredKeys.join(", ")}`,
+          "warning"
+        );
+      }
+    },
+  });
 
   // Register the merge tool
   pi.registerTool({
@@ -714,6 +718,9 @@ export default function (pi: ExtensionAPI) {
       });
       
       try {
+        // Resolve the anchoredit binary per call so /reload-env changes apply
+        const bin = getAnchorEditBin();
+
         // Validate file and source parameters
         if (!params.file || !params.file.trim()) {
           log('warn', "Validation failed: file parameter is missing");
