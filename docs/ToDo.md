@@ -2,8 +2,8 @@
 
 | 項目 | 内容 |
 |------|------|
-| 更新日 | 2026-08-19 |
-| 最新コミット | `9549fe2` + この文書追加コミット(`/reload-fa-env` 改名。最新は `git log -2` で確認) |
+| 更新日 | 2026-08-20 |
+| 最新コミット | ToDo 1(実測ベースライン)完了コミット群。最新は `git log -3` で確認 |
 | リポジトリ | `C:\Users\Game\MyDevEnv\wd\pi-fa-merge`(リモート: github.com/kmlaborat/pi-fa-merge) |
 | インストール先 | `C:\Users\Game\MyDevEnv\.home\.pi\agent\git\github.com\kmlaborat\pi-fa-merge`(`9549fe2` まで pull 済み、`.env` は存在) |
 | 前提PJ | `C:\Users\Game\MyDevEnv\wd\AnchorScope` / `AnchorEdit`(v2、`main` clean。AnchorScope はライブラリ依存。`anchoredit` バイナリ v2.0.0 はインストール済み — 修正なければ再 `cargo install` 不要) |
@@ -16,9 +16,13 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 
 | パス | 内容 |
 |------|------|
-| `extensions/index.ts` | ツール `fa_merge` + スラッシュコマンド `/reload-fa-env` + 全ロジック(純粋関数は export 済み) |
+| `extensions/index.ts` | ツール `fa_merge` + スラッシュコマンド `/reload-fa-env` + ファイル系ロジック。純粋コアは `core.ts` からの re-export |
+| `extensions/core.ts` | **純粋 fast-apply コア**(pi フレームワーク非依存): `buildPrompt` / `callOpenAiCompatibleApi` / `parseOutput` / `validateStructure` / `withRetry` 等。ハーネスとテストが直接使う |
 | `extensions/env.ts` | `.env` ローダー(pi-fc-search と同設計、`tests/env.test.ts` で直接テスト) |
 | `tests/merge.test.ts` / `tests/env.test.ts` | 実関数の直接ユニットテスト計 59 件 |
+| `harness/fetch-cases.mjs` | HF `Kortix/FastApply-dataset-v1.0` test split から層化抽出(言語×トークン帯)→ `harness/cases.json` |
+| `harness/run.mts` | ベースラインハーネス: `buildPrompt`→API→`parseOutput` を直接駆動。`--case N` / `--timeout MS` 対応。結果は `harness/results/<run-id>/` |
+| `harness/results/baseline-2026-08-19.md` | **ベースライン報告書**(完全一致 65% / sim≥0.95 80% / validateStructure 誤爆 25% 等) |
 | `docs/SPEC.md` | 契約(パラメータ・エラー種別・受け入れテスト)。実装と同期済み |
 | `skills/pi-fa-merge/SKILL.md` | エージェント向けスキル |
 
@@ -50,10 +54,24 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 | `95da96b` | **fast-apply 純粋回帰**(`original_code`/`update_snippet`、学習テンプレートとバイト一致) |
 | `7978738` | CI Node 20→22(pi-coding-agent が >=22.19 を要求) |
 | `9549fe2` | `.env` ロードの pi-fc-search 整合 + `/reload-env` 追加(→ 次コミットで `reload-fa-env` に改名) |
+| `06b43eb` | `/reload-fa-env` 改名 + この文書追加 |
+| (本セッション) | ① 純粋コアを `extensions/core.ts` に抽出(pi 非依存化。index.ts は re-export で後方互換、59 テスト維持) ② 評価ハーネス `harness/` 新設 + **実測ベースライン実行**(20 件、結果 `harness/results/baseline-2026-08-19.md`) ③ e2e(anchoredit 書き込み)確認完了 |
+
+## 実測ベースラインの結果サマリ(詳細: `harness/results/baseline-2026-08-19.md`)
+
+- データ: HF `Kortix/FastApply-dataset-v1.0` **test** split から層化 20 件(Python は元データセットにほぼ無く不包含)。
+- モデル: FastApply-7B(ローカル OpenAI 互換エンドポイント。実 `.env`)。
+- **完全一致 13/20 (65%)、sim≥0.95 まで 16/20 (80%)、MALFORMED 0 件**。
+- 実モデルエラー 4/20(挿入欠落・別関数本体生成・コメント削除)。`... existing code ...` 省略と 4k tok 超の入力で相関。
+- **`validateStructure` の prefix 必須チェックが誤爆 5/20 (25%)** — 先頭(import 等)を正当に変更するケースで `startsWith` 検証が誤って失敗し、GT と完全一致の出力を `STRUCTURE_MANGLE_ERROR` で拒否。pipeline 成功率を 80%→55% に圧縮。**ToDo 4 が最優先に昇格**。
+- ローカルモデルは 4k tok 超で 60〜130s → `FAST_APPLY_TIMEOUT` 既定 60s では TIMEOUT 7/20。ローカル運用は 180s+ 推奨。
+- 自然言語 A/B(次項)の比較基準 = 上記数値。
 
 ## 次のやること(優先度順)
 
-### 1. 実測ベースライン — fast-apply の本来の性能 ⭐
+### 1. ~~実測ベースライン~~ — **完了 (2026-08-20)** ⭐
+報告: `harness/results/baseline-2026-08-19.md`。以下は当初の計画(記録用)。
+
 目的: 純粋 fast-apply(分布内)の精度を定量し、自然言語実験の比較基準にする。
 
 - **評価ハーネス設計**
@@ -65,9 +83,15 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 - 副産物: 実エンドポイント + anchoredit 書き込みのエンドツーエンド初回確認
 
 ### 2. 自然言語 A/B 実験
-- baseline 確定後、`update_snippet` を自然言語指示に置換(または併記)して同条件で再計測
+- baseline は**確定済み**(`harness/results/baseline-2026-08-19.md`: 完全一致 65% / sim≥0.95 80%)
+- 次: 同 20 件に対し `update_snippet` を自然言語指示に置換して再計測(ハーネスに `--mode nl` 的バリアント追加)
 - 精度劣化を定量 → 「自然言語サポートを入れる/入れない/オプションにする」を判断
 - 参考: fast-apply はコードスニペットでファインチューニングされており、自然言語は**分布外**。劣化が大きいなら fast-apply 維持が合理的
+
+### 2.5. validateStructure の誤爆修正(実測で最優先に昇格 ⭐)
+- prefix 必須チェック(先頭 20% の `startsWith`)がファイル先頭の正当な変更(import 追加等)で誤爆 5/20。出力は GT とバイト一致なのに拒否。
+- 修正案: prefix の「存在」チェック(各 prefix 行が updatedCode に含まれるか)へ置き換え、または先頭 N 行のみ緩く。59 単体テスト + ベースライン再実行で回帰確認。
+- 修正で pipeline 成功率 55% → 80% 回復見込み。
 
 ### 3. リリース準備(破壊的変更)
 - `source`/`instruction` → `original_code`/`update_snippet` は破壊的 → version `2.0.0` → **`3.0.0`** + git tag
@@ -76,13 +100,17 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 
 ### 4. 軽微項(任意)
 - lint の実導入(現在 `npm run lint` は placeholder。README/CI では非ブロッキングと明記済み)
-- 実測で構造検証(`validateStructure`)の偽検知率が出るようなら閾値チューニング(特に先頭 20% prefix 必須チェックは shebang/docstring 追加時に誤爆しうる)
+- ~~構造検証の閾値チューニング~~ → **2.5 に昇格済み(誤爆を実測で確認)**
 
 ## 注意事項 / 実務メモ
 
 - **拡張コードの変更は pi セッション再起動で反映**(pi 拡張はセッション開始時にロード)。`/reload-fa-env` は `.env` 再読込のみで、コード反映にはならない。
+- **実測の環境メモ**: エンドポイントはローカル GPU の FastApply-7B(`.env` 参照)。1 レクエスト 3〜130s。ハーネスは `npx tsx harness/run.mts` で起動し、`.env` は**インストール先**のものを `applyEnvContent` で読み込む(リポジトリ側 `.env` は存在しない)。`--timeout` で上書き可。
+- **HF datasets-server はレート制限あり**(429)。全行取得はキャッシュ `harness/tmp/test-rows.json` を再利用(`fetch-cases.mjs` が自動利用)。
 - `.env`(インストール先)に実 API キーがある — コミットしないこと(`.gitignore` 済み)。実測(ToDo 1)で使う。
 - `docs/refactoring-plan-v2.md` は gitignore 済みのローカル文書で、**内容(v2 の自然言語設計)は 95da96b で撤回済み**。新しい判断材料にはしないこと。
 - fast-apply 仕様の一次情報は `https://github.com/kortix-ai/fast-apply`(README の推論プロンプト + `notebooks/Fine-Tuning__FastApply-7B-Instruct.ipynb` の `formatting_prompts_func` が学習データ形式の正体。README と学習テンプレートで "a/an coding" が微妙に違うが、**学習テンプレート側(an)に合わせる**)。
 - anchoredit CLI(本セッションで実証): anchor 文字列が `-` で始まると clap がフラグと誤認する — 編集ツールで扱うときは anchor を非ダッシュ文字で始めるか `-file` フラグを使う。
 - 成功/失敗の CI 確認は `curl https://api.github.com/repos/kmlaborat/pi-fa-merge/actions/runs?per_page=1` でポーリング可能(ログ本体は未認証では取得不可。ジョブの steps conclusion まで見られる)。
+- **`harness/tmp/` は gitignore 済み**(生データキャッシュ 2.4MB、probe スクリプト)。コミットする成果物は `cases.json` / `run.mts` / `fetch-cases.mjs` / `results/` のみ。
+- **`extensions/core.ts` 抽出の意味**: `index.ts` は `@earendil-works/pi-coding-agent` を import するため、Node 標準 ESM では解決不能(その package.json は `import` エクスポートのみで `require` 不可、且つリポジトリ root に `"type": "module"` が無い)。ハーネス/スクリプトは **`core.ts` を直接 import すること**(pi 非依存)。

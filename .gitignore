@@ -7,3 +7,7 @@ dist/
 # Local technical documents
 docs/technical-issue-*.md
 docs/refactoring-plan-*.md
+
+# Evaluation harness scratch space (raw dataset cache, probes)
+harness/tmp/
+
