@@ -141,7 +141,7 @@ function getAnchorEditBin(): string {
 // File Path Resolution
 // ============================================================================
 
-function resolveFilePath(filePath: string, cwd: string): string {
+export function resolveFilePath(filePath: string, cwd: string): string {
   // Windows absolute path (e.g. C:\foo\bar.rs) — pass through
   if (path.isAbsolute(filePath) && /^[a-zA-Z]:\\/.test(filePath)) {
     return filePath;
@@ -200,7 +200,7 @@ function resolveFilePath(filePath: string, cwd: string): string {
 // <update>, and expects output wrapped in <updated-code> tags.
 // ============================================================================
 
-function buildPrompt(source: string, instruction: string): string {
+export function buildPrompt(source: string, instruction: string): string {
   return `You are a code transformation assistant. Your job is to transform the source code according to the instruction.
 
 Source code:
@@ -245,7 +245,7 @@ interface StructureValidationResult {
   details?: string;
 }
 
-function validateStructure(source: string, updatedCode: string): StructureValidationResult {
+export function validateStructure(source: string, updatedCode: string): StructureValidationResult {
   // Extract important elements from source code
   const originalFunctions = source.match(/\b(?:function|def|class)\s+(\w+)/g);
   const originalImports = source.match(/\b(?:import|require)\s+/g);
@@ -308,7 +308,7 @@ function validateStructure(source: string, updatedCode: string): StructureValida
 // Output Parser
 // ============================================================================
 
-function parseOutput(rawResponse: string, source: string): MergeResult {
+export function parseOutput(rawResponse: string, source: string): MergeResult {
   const openTag = "<updated-code>";
   const closeTag = "</updated-code>";
 
@@ -433,7 +433,7 @@ async function withRetry<T>(operation: () => Promise<T>): Promise<T> {
   throw lastError;
 }
 
-function isRetryable(error: unknown): boolean {
+export function isRetryable(error: unknown): boolean {
   if (error instanceof Error) {
     return (
       error.message.includes("429") ||

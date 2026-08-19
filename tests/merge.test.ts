@@ -1,11 +1,27 @@
 /**
- * Merge tool tests - verify SPEC §6 acceptance test cases
+ * Merge tool tests - verify SPEC §6 acceptance test cases and unit-test
+ * the pure functions exported from extensions/index.ts.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'vitest';
-import { setupTestFixtures, cleanupTestFixtures } from './setup';
+import { resolve } from 'path';
+import {
+  buildPrompt,
+  parseOutput,
+  validateStructure,
+  isRetryable,
+  resolveFilePath,
+} from '../extensions/index';
+import {
+  setupTestFixtures,
+  cleanupTestFixtures,
+  TEST_FIXTURES_DIR,
+} from './setup';
 
-describe("Merge Tool", () => {
+const CALCULATE_TOTAL_SOURCE = `def calculate_total(price, tax):
+    return price * (1 + tax)`;
+
+describe('Merge Tool', () => {
   beforeAll(() => {
     setupTestFixtures();
   });
@@ -14,81 +30,258 @@ describe("Merge Tool", () => {
     cleanupTestFixtures();
   });
 
-  describe("Structure validation", () => {
-    test("should preserve function names in merged code", () => {
-      const originalCode = `
-def calculate_total(price, tax):
-    return price * (1 + tax)
-`;
-      const mergedCode = `
-def calculate_total(price, tax):
-    return price * (1 + tax)
-
-def get_version():
-    return "1.0.0"
-`;
-      // Verify original function is preserved
-      expect(mergedCode).toContain("calculate_total");
-      expect(mergedCode).toContain("get_version");
+  describe('buildPrompt', () => {
+    test('embeds source code inside <code> tags', () => {
+      const prompt = buildPrompt('def f():\n    pass', 'add docstring');
+      expect(prompt).toContain('<code>\ndef f():\n    pass\n</code>');
     });
 
-    test("should detect function loss", () => {
-      const originalCode = `
-def calculate_total(price, tax):
-    return price * (1 + tax)
-`;
-      const mergedCode = `
-def get_version():
-    return "1.0.0"
-`;
-      // Original function is lost
-      expect(mergedCode).not.toContain("calculate_total");
+    test('embeds instruction inside <update> tags', () => {
+      const prompt = buildPrompt('def f():\n    pass', 'add docstring');
+      expect(prompt).toContain('<update>\nadd docstring\n</update>');
+    });
+
+    test('instructs the model to output <updated-code> tags', () => {
+      const prompt = buildPrompt('def f():\n    pass', 'change body');
+      expect(prompt).toContain('<updated-code>');
+      expect(prompt).toContain('</updated-code>');
     });
   });
 
-  describe("Output parsing", () => {
-    test("should extract code from XML tags", () => {
+  describe('parseOutput (SPEC §6)', () => {
+    test('Test Case 1: normal merge (adding a function to Python code)', () => {
       const rawResponse = `<updated-code>
 def calculate_total(price, tax):
     return price * (1 + tax)
+
+def get_version():
+    return "1.0.0"
 </updated-code>`;
-      
-      const openTag = "<updated-code>";
-      const closeTag = "</updated-code>";
-      
-      const openIndex = rawResponse.indexOf(openTag);
-      const contentStart = openIndex + openTag.length;
-      const closeIndex = rawResponse.indexOf(closeTag, contentStart);
-      
-      expect(closeIndex).toBeGreaterThan(0);
-      expect(rawResponse.substring(contentStart, closeIndex).trim()).toContain("calculate_total");
+
+      const result = parseOutput(rawResponse, CALCULATE_TOTAL_SOURCE);
+
+      expect(result.success).toBe(true);
+      expect(result.updated_code).toBe(
+        `def calculate_total(price, tax):
+    return price * (1 + tax)
+
+def get_version():
+    return "1.0.0"`,
+      );
+      expect(result.error).toBeUndefined();
     });
 
-    test("should handle missing closing tag", () => {
+    test('Test Case 2: partial rewrite preserving indentation', () => {
+      const source = `class User:
+    def greet(self):
+        print("Hello")
+        return False`;
       const rawResponse = `<updated-code>
-def calculate_total(price, tax):
-    return price * (1 + tax)`;
-      
-      const openTag = "<updated-code>";
-      const closeTag = "</updated-code>";
-      
-      const openIndex = rawResponse.indexOf(openTag);
-      const contentStart = openIndex + openTag.length;
-      const closeIndex = rawResponse.indexOf(closeTag, contentStart);
-      
-      expect(closeIndex).toBe(-1);
+class User:
+    def greet(self):
+        print("Hello World")
+        return True
+</updated-code>`;
+
+      const result = parseOutput(rawResponse, source);
+
+      expect(result.success).toBe(true);
+      expect(result.updated_code).toBe(
+        `class User:
+    def greet(self):
+        print("Hello World")
+        return True`,
+      );
+    });
+
+    test('Test Case 3: malformed output (missing closing tag)', () => {
+      const rawResponse = `<updated-code>def incomplete():`;
+
+      const result = parseOutput(rawResponse, CALCULATE_TOTAL_SOURCE);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('MALFORMED_OUTPUT');
+      expect(result.details).toBe('Closing tag </updated-code> was not found.');
+    });
+
+    test('missing opening tag is malformed', () => {
+      const result = parseOutput('def f():\n    pass', CALCULATE_TOTAL_SOURCE);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('MALFORMED_OUTPUT');
+      expect(result.details).toBe('Opening tag <updated-code> was not found.');
+    });
+
+    test('strips markdown code fences inside the tags', () => {
+      const rawResponse = `<updated-code>
+\`\`\`python
+def get_version():
+    return "1.0.0"
+\`\`\`
+</updated-code>`;
+
+      const result = parseOutput(
+        rawResponse,
+        `def get_version():
+    return "0.9.0"`,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.updated_code).toBe(
+        `def get_version():
+    return "1.0.0"`,
+      );
+    });
+
+    test('structure mangle (function lost) is rejected before returning code', () => {
+      const rawResponse = `<updated-code>
+def helper():
+    return 1
+</updated-code>`;
+
+      const result = parseOutput(
+        rawResponse,
+        `def calculate_total(price, tax):
+    return price * (1 + tax)
+
+def helper():
+    return 1`,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('STRUCTURE_MANGLE_ERROR');
+      expect(result.details).toContain('calculate_total');
     });
   });
 
-  describe("Input validation", () => {
-    test("should reject empty original_code", () => {
-      const originalCode = "";
-      expect(originalCode.trim()).toBe("");
+  describe('validateStructure', () => {
+    test('accepts valid transformed code', () => {
+      const source = `def f():
+    return 1`;
+      const updated = `def f():
+    return 2`;
+      expect(validateStructure(source, updated)).toEqual({ valid: true });
     });
 
-    test("should reject empty update_snippet", () => {
-      const updateSnippet = "";
-      expect(updateSnippet.trim()).toBe("");
+    test('detects lost function/class name', () => {
+      const result = validateStructure(
+        `def calculate_total(price, tax):
+    return price * (1 + tax)`,
+        `def something_else():
+    return 1`,
+      );
+      expect(result.valid).toBe(false);
+      expect(result.details).toContain('calculate_total');
+    });
+
+    test('detects all imports lost', () => {
+      const result = validateStructure(
+        `import os
+
+def f():
+    return os.getpid()`,
+        `def f():
+    return 1`,
+      );
+      expect(result.valid).toBe(false);
+      expect(result.details).toContain('imports');
+    });
+
+    test('detects more than 50% line loss', () => {
+      const source =
+        Array.from({ length: 20 }, (_, i) => `# line ${i}`).join('\n') +
+        `\ndef f():
+    return 1`;
+      const result = validateStructure(
+        source,
+        `def f():
+    return 1`,
+      );
+      expect(result.valid).toBe(false);
+      expect(result.details).toContain('lost too many lines');
+    });
+
+    test('detects lost prefix for files longer than 5 lines', () => {
+      const sourceLines = [
+        'def f():',
+        '    x = 1',
+        '    y = 2',
+        '    z = 3',
+        '    w = 4',
+        '    v = 5',
+        ...Array.from({ length: 22 }, (_, i) => `    t${i} = ${i}`),
+        '    return x',
+      ];
+      expect(sourceLines.length).toBeGreaterThan(5);
+      const source = sourceLines.join('\n');
+      // Keeps function f and all lines, but adds a header at the top
+      const updated = `# new header\n` + source;
+
+      const result = validateStructure(source, updated);
+      expect(result.valid).toBe(false);
+      expect(result.details).toContain('prefix');
+    });
+
+    test('skips prefix check for very small files (5 lines or less)', () => {
+      const source = `def f():
+    a = 1
+    b = 2
+    return a + b`;
+      const updated = `# note
+def f():
+    a = 1
+    b = 2
+    return a + b`;
+      expect(validateStructure(source, updated)).toEqual({ valid: true });
+    });
+  });
+
+  describe('isRetryable', () => {
+    test.each(['429', '500', '502', '503', '504'])(
+      'retries on status %s',
+      (status) => {
+        expect(isRetryable(new Error(`API error: ${status} Bad`))).toBe(true);
+      },
+    );
+
+    test.each(['401', '403', '404'])('does not retry on status %s', (status) => {
+      expect(isRetryable(new Error(`API error: ${status} Bad`))).toBe(false);
+    });
+
+    test('does not retry on non-Error values', () => {
+      expect(isRetryable('429')).toBe(false);
+      expect(isRetryable(null)).toBe(false);
+      expect(isRetryable(undefined)).toBe(false);
+    });
+  });
+
+  describe('resolveFilePath', () => {
+    const fixtureFile = 'test.ts';
+    const fixtureAbsolute = resolve(TEST_FIXTURES_DIR, fixtureFile);
+
+    test('resolves an existing relative path against cwd', () => {
+      expect(resolveFilePath(fixtureFile, TEST_FIXTURES_DIR)).toBe(
+        fixtureAbsolute,
+      );
+    });
+
+    test('returns an existing absolute path as-is', () => {
+      expect(resolveFilePath(fixtureAbsolute, process.cwd())).toBe(
+        fixtureAbsolute,
+      );
+    });
+
+    test('falls back to the original path when the file does not exist', () => {
+      expect(resolveFilePath('does-not-exist.ts', TEST_FIXTURES_DIR)).toBe(
+        'does-not-exist.ts',
+      );
+    });
+
+    test('Windows: drive-letter absolute paths pass through', () => {
+      if (process.platform !== 'win32') return;
+      expect(resolveFilePath('C:\\some\\file.rs', process.cwd())).toBe(
+        'C:\\some\\file.rs',
+      );
     });
   });
 });
