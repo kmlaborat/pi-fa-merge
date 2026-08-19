@@ -2,9 +2,9 @@
 
 ### 1. Purpose
 
-Provide a pi.dev-compliant package (Tool/Skill) that transforms source code based on natural language instructions using fast-apply models at high speed and low cost, and **writes the transformed code directly to a target file using hash-verified scope matching**. Because the agent describes the change instead of regenerating the code itself, token consumption and response latency are reduced.
+Provide a pi.dev-compliant package (Tool/Skill) that merges an `update_snippet` — a code snippet containing the changes — into `original_code` at high speed and low cost using fast-apply models, producing the complete updated code, and **writes the merged result directly to a target file using hash-verified scope matching**. Because the agent supplies only the changed code instead of the whole file, token consumption and response latency are reduced.
 
-This package communicates with **custom OpenAI-compatible endpoints** serving `fast-apply` models that conform to the [**kortix-ai/fast-apply**](https://github.com/kortix-ai/fast-apply) specification. It uses the tag-based prompt format (`<code>`, `<update>`, `<updated-code>`) defined by the specification — sent as system + user messages exactly as the fast-apply models were fine-tuned on — and can connect to any OpenAI-compatible API server hosting compatible models.
+This package communicates with **custom OpenAI-compatible endpoints** serving `fast-apply` models that conform to the [**kortix-ai/fast-apply**](https://github.com/kortix-ai/fast-apply) specification. It sends the prompt as system + user messages in the tag-based format (`<code>`, `<update>`, `<updated-code>`), a byte-exact copy of the fast-apply fine-tuning template, and can connect to any OpenAI-compatible API server hosting compatible models.
 
 ### 2. Inputs & Environment
 
@@ -12,10 +12,19 @@ This package (Skill name: `pi-fa-merge`) accepts the following input parameters.
 
 | Parameter | Type | Required/Optional | Description |
 | --- | --- | --- | --- |
-| `source` | String | Required | The current content to transform (entire file or a partial scope). Must exactly match the file content. Must not be empty. |
-| `instruction` | String | Required | Natural language description of the change to apply. Must not be empty. |
+| `original_code` | String | Required | The complete original code to modify (entire file or a partial scope). Must exactly match the file content. Must not be empty. |
+| `update_snippet` | String | Required | A code snippet containing only the new or modified code. Must not be empty. See "Update Snippet Format" below. |
 | `file` | String | **Required** | **Path to the file to edit (relative or absolute). Required for file write operation.** |
-| `anchor` | String | Optional | Exact text in the file for scope matching and hash verification. Must appear exactly once in the file. Defaults to `source`. |
+| `anchor` | String | Optional | Exact text in the file for scope matching and hash verification. Must appear exactly once in the file. Defaults to `original_code`. |
+
+**Update Snippet Format**
+
+The `update_snippet` follows the kortix-ai/fast-apply data format (the format the models were fine-tuned on):
+
+* Contains **only the new or modified code** — unchanged parts must not be repeated unnecessarily.
+* Provides enough context to indicate placement: **at least one line before and after** the changed region, or a clear position marker.
+* Uses ellipsis comments (e.g. `// ... existing code ...`) **only** when significant portions are omitted; never for a complete file replacement.
+* The update snippet must be an **exact subset of the final code**.
 | `endpoint_url` | String | Optional | The base URL of the OpenAI-compatible endpoint. Falls back to `FAST_APPLY_ENDPOINT_URL` environment variable. |
 | `model_name` | String | Optional | The model identifier to use. Falls back to `FAST_APPLY_MODEL_NAME` environment variable or `fast-apply-7b`. |
 
@@ -43,7 +52,7 @@ On success, the package guarantees a JSON object or serialized output with the f
 
 * **Raw code return:** `updated_code` must contain only pure code, with no metadata such as model output tags (`<updated-code>` and `</updated-code>`), Markdown code blocks (```), or other wrappers.
 * **Structural preservation:** Indentation, comments, blank lines, and function ordering outside the diff-applied regions must be completely preserved.
-* **Structure validation:** The system validates that critical symbols from the original code are preserved in the transformed output. The validation checks:
+* **Structure validation:** The system validates that critical symbols from the original code are preserved in the merged output. The validation checks:
   * Function/class names are preserved
   * Import/require statements are preserved
   * Code line count does not decrease by more than 50%
@@ -102,7 +111,7 @@ Expected failure patterns and system behavior.
 | **Tag Not Found Error** | Return `success: false, error: "MALFORMED_OUTPUT"`. Prevents the critical bug of overwriting files with raw output. |
 | **Context Length Exceeded** | If the estimated token count (calculated from total character count divided by 4) exceeds 8192 tokens, immediately raise a `CONTEXT_EXCEEDED` error. |
 | **File Too Large** | If the input file exceeds the maximum line count (default: 500 lines), immediately raise a `FILE_TOO_LARGE` error. |
-| **Structure Mangle Error** | If the transformed code loses critical structure (function names, imports, >50% lines lost, or prefix lost), return `success: false, error: "STRUCTURE_MANGLE_ERROR"` with details indicating what was lost. |
+| **Structure Mangle Error** | If the merged code loses critical structure (function names, imports, >50% lines lost, or prefix lost), return `success: false, error: "STRUCTURE_MANGLE_ERROR"` with details indicating what was lost. |
 | **Anchor Not Found** | Return `success: false, error: "ANCHOREDIT_NO_MATCH"`. Indicates the anchor text doesn't exist in the file. |
 | **Multiple Anchor Matches** | Return `success: false, error: "ANCHOREDIT_MULTIPLE"`. Indicates the anchor text appears more than once. |
 | **Hash Mismatch** | Return `success: false, error: "ANCHOREDIT_HASH_MISMATCH"`. Indicates the file was modified externally. |
@@ -114,12 +123,16 @@ Specific test cases that must pass before implementation, based on TDD rules.
 **Test Case 1: Normal case (Adding a function to Python code)**
 
 * **Input:**
-* `source`:
+* `original_code`:
 ```python
 def calculate_total(price, tax):
     return price * (1 + tax)
 ```
-* `instruction`: "Add a get_version function that returns '1.0.0'"
+* `update_snippet`:
+```python
+def get_version():
+    return "1.0.0"
+```
 * `file`: "/path/to/test.py"
 * `anchor`: "def calculate_total"
 
@@ -136,14 +149,19 @@ def calculate_total(price, tax):
 **Test Case 2: Normal case (Partial rewrite of existing logic with indentation preservation)**
 
 * **Input:**
-* `source`:
+* `original_code`:
 ```python
 class User:
     def greet(self):
         print("Hello")
         return False
 ```
-* `instruction`: "Change greet to print 'Hello World' and return True"
+* `update_snippet`:
+```python
+    def greet(self):
+        print("Hello World")
+        return True
+```
 * `file`: "/path/to/test.py"
 * `anchor`: "class User:"
 
@@ -192,7 +210,7 @@ class User:
 
 ### 7. Non-goals (Out of Scope)
 
-* **Deciding what to change:** Deciding which files to modify and formulating the change instruction is the responsibility of the agent that calls this package.
+* **Generation of the `update_snippet`:** Deciding which files to modify and generating the update snippet is the responsibility of the agent that calls this package.
 * **AnchorEdit binary distribution:** The `anchoredit` binary must be installed separately (via pi-anchoredit package or manual installation).
 
 ### 8. CI/CD Requirements
@@ -206,7 +224,7 @@ class User:
 
 Tasks decomposed while strictly adhering to the standard-library-only constraint.
 
-* **[Task 1: Prompt Builder]** Create and test a string processing function that strictly assembles the input `source` and `instruction` into the fast-apply inference prompt (system + user messages) using the `<code>` and `<update>` tags. External template engines are prohibited.
+* **[Task 1: Prompt Builder]** Create and test a string processing function that strictly assembles the input `original_code` and `update_snippet` into the fast-apply inference prompt (system + user messages, byte-exact copy of the fine-tuning template) using the inline `<code>` and `<update>` tags. External template engines are prohibited.
 * **[Task 2: OpenAI-Compatible Client]** Implement a generic request client for OpenAI-compatible endpoints using the built-in **`fetch`**. Include fixed injection of `temperature: 0` and implement **custom exponential backoff retry logic (up to 3 times) using `setTimeout`** for 429/5xx errors, along with mock tests.
 * **[Task 3: Output Parser]** Implement and test logic to safely extract and trim content from `<updated-code>...</updated-code>` in model output using standard string methods (`indexOf`, `substring`) or regular expressions, without external parsing libraries (Zod or third-party XML parsers).
 * **[Task 4: pi.dev Skill Wrapper]** Integrate Tasks 1–3 and define an entry point conforming to the pi.dev package manifest. Include safe key retrieval from environment variables via `process.env`.

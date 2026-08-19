@@ -1,14 +1,14 @@
 /**
  * pi-fa-merge: Fast-apply merge tool for AI coding agents
  *
- * Transforms source code based on natural language instructions using any
+ * Merges an update snippet (code) into original code using any
  * OpenAI-compatible endpoint serving fast-apply models, and writes the
- * transformed code to the file with hash-verified scope matching.
+ * merged result to the file with hash-verified scope matching.
  *
  * This package implements the **kortix-ai/fast-apply** specification
  * (https://github.com/kortix-ai/fast-apply), which defines the tag-based
- * prompt format (`<original-code>`, `<update-snippet>`, `<updated-code>`)
- * and dedicated model interfaces for efficient code merging.
+ * prompt format (`<code>`, `<update>`, `<updated-code>`) and dedicated
+ * model interfaces for efficient code merging.
  *
  * @package pi-fa-merge
  */
@@ -78,10 +78,10 @@ loadEnvFile();
 // ============================================================================
 
 interface MergeParams {
-  file: string;                // Path to the file to edit
-  source: string;              // Current content to transform (must be exact)
-  instruction: string;         // Natural language instruction for the change
-  anchor?: string;             // Exact text for scope matching (defaults to source)
+  file: string;                 // Path to the file to edit
+  original_code: string;        // The complete original code (must be exact)
+  update_snippet: string;       // Code snippet containing the changes to apply
+  anchor?: string;              // Exact text for scope matching (defaults to original_code)
   endpoint_url?: string;
   model_name?: string;
 }
@@ -279,8 +279,9 @@ export function resolveFilePath(filePath: string, cwd: string): string {
 // The prompt uses the fast-apply tag structure: <code>,
 // <update>, and expects output wrapped in <updated-code> tags.
 //
-// NOTE: This prompt intentionally follows the kortix-ai/fast-apply
-// inference prompt structure (system + user messages) because the
+// NOTE: This prompt is a BYTE-EXACT copy of the kortix-ai/fast-apply
+// fine-tuning template (see the Fine-Tuning notebook in the upstream
+// repository), including the "an coding assistant" typo, because the
 // fast-apply models are fine-tuned on exactly this format.
 // ============================================================================
 
@@ -289,12 +290,12 @@ export interface PromptMessage {
   content: string;
 }
 
-export function buildPrompt(source: string, instruction: string): PromptMessage[] {
+export function buildPrompt(originalCode: string, updateSnippet: string): PromptMessage[] {
   return [
     {
       role: "system",
       content:
-        "You are a coding assistant that helps merge code updates, ensuring every modification is fully integrated.",
+        "You are an coding assistant that helps merge code updates, ensuring every modification is fully integrated.",
     },
     {
       role: "user",
@@ -303,13 +304,9 @@ export function buildPrompt(source: string, instruction: string): PromptMessage[
 - Output only the updated code, enclosed within <updated-code> and </updated-code> tags.
 - Do not include any additional text, explanations, placeholders, ellipses, or code fences.
 
-<code>
-${source}
-</code>
+<code>${originalCode}</code>
 
-<update>
-${instruction}
-</update>
+<update>${updateSnippet}</update>
 
 Provide the complete updated code.`,
     },
@@ -557,21 +554,21 @@ export async function performMerge(params: MergeParams): Promise<MergeResult> {
   });
 
   // Validate inputs
-  if (!params.source || !params.source.trim()) {
-    log('warn', "Validation failed: source is empty");
+  if (!params.original_code || !params.original_code.trim()) {
+    log('warn', "Validation failed: original_code is empty");
     return {
       success: false,
       error: "VALIDATION_ERROR",
-      details: "source is required and cannot be empty.",
+      details: "original_code is required and cannot be empty.",
     };
   }
 
-  if (!params.instruction || !params.instruction.trim()) {
-    log('warn', "Validation failed: instruction is empty");
+  if (!params.update_snippet || !params.update_snippet.trim()) {
+    log('warn', "Validation failed: update_snippet is empty");
     return {
       success: false,
       error: "VALIDATION_ERROR",
-      details: "instruction is required and cannot be empty.",
+      details: "update_snippet is required and cannot be empty.",
     };
   }
 
@@ -587,7 +584,7 @@ export async function performMerge(params: MergeParams): Promise<MergeResult> {
   }
 
   // Validate context length (estimated tokens = total chars / 4)
-  const estimatedTokens = Math.floor((params.source.length + params.instruction.length) / 4);
+  const estimatedTokens = Math.floor((params.original_code.length + params.update_snippet.length) / 4);
   if (estimatedTokens > MAX_CONTEXT_TOKENS) {
     log('warn', `Context length exceeded: ${estimatedTokens} tokens`);
     return {
@@ -598,7 +595,7 @@ export async function performMerge(params: MergeParams): Promise<MergeResult> {
   }
 
   // Validate file size (line count)
-  const lineCount = params.source.split('\n').length;
+  const lineCount = params.original_code.split('\n').length;
   const maxLines = getMaxCodeLines();
   if (lineCount > maxLines) {
     log('warn', `Source too large: ${lineCount} lines exceeds maximum of ${maxLines} lines`);
@@ -612,7 +609,7 @@ export async function performMerge(params: MergeParams): Promise<MergeResult> {
   log('debug', `Processing source with ${lineCount} lines, estimated ${estimatedTokens} tokens`);
 
   // Build prompt using the kortix-ai/fast-apply inference prompt structure
-  const messages = buildPrompt(params.source, params.instruction);
+  const messages = buildPrompt(params.original_code, params.update_snippet);
 
   // Call API with retry
   let rawResponse: string;
@@ -654,7 +651,7 @@ export async function performMerge(params: MergeParams): Promise<MergeResult> {
 
   // Parse output with structure validation
   log('debug', "Parsing API response");
-  const result = parseOutput(rawResponse, params.source);
+  const result = parseOutput(rawResponse, params.original_code);
   
   if (result.success) {
     log('info', "Merge operation completed successfully");
@@ -676,26 +673,27 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "fa_merge",
     label: "Fast-Apply Merge",
-    description: "Transform source code based on an instruction using fast-apply models, then apply it to a file with hash verification",
-    promptSnippet: "Generate and apply a code transformation based on a natural language instruction",
+    description: "Merge an update snippet into original code using fast-apply models, then write the result to a file with hash verification",
+    promptSnippet: "Merge a code update snippet into a file using a fast-apply model",
     promptGuidelines: [
-      "Use fa_merge when you want to describe a change in natural language and let the tool generate the replacement.",
-      "source must be the exact current content you want to transform (read it first).",
-      "instruction is a natural language description of the desired change.",
-      "anchor defaults to source — typically you don't need to specify it unless you want a different scope.",
+      "Use fa_merge to apply a code change: pass the exact original code and an update snippet; a fast-apply model merges them and the result is written to the file.",
+      "original_code must be the exact current content you want to transform (read it first).",
+      "update_snippet contains only the new/modified code, with at least one context line before and after, and '... existing code ...' markers for omitted parts. It must be an exact subset of the final code.",
+      "For a complete file replacement, pass the full new file as update_snippet (no ellipsis markers).",
+      "anchor defaults to original_code — typically you don't need to specify it unless you want a different scope.",
     ],
     parameters: Type.Object({
       file: Type.String({
         description: "Path to the file to edit",
       }),
-      source: Type.String({
-        description: "Current content to transform (must be exact)",
+      original_code: Type.String({
+        description: "The complete original code to modify (must be exact)",
       }),
-      instruction: Type.String({
-        description: "Natural language description of the desired change",
+      update_snippet: Type.String({
+        description: "Code snippet with the changes to apply (new/modified code with context lines and ellipsis markers for omissions)",
       }),
       anchor: Type.Optional(Type.String({
-        description: "Exact text to match in the file (defaults to source). Must appear exactly once.",
+        description: "Exact text to match in the file (defaults to original_code). Must appear exactly once.",
       })),
       endpoint_url: Type.Optional(
         Type.String({
@@ -730,26 +728,26 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        if (!params.source || !params.source.trim()) {
-          log('warn', "Validation failed: source parameter is missing");
+        if (!params.original_code || !params.original_code.trim()) {
+          log('warn', "Validation failed: original_code parameter is missing");
           return {
             content: [{ type: "text", text: JSON.stringify({
               success: false,
               error: "VALIDATION_ERROR",
-              details: "source parameter is required.",
+              details: "original_code parameter is required.",
             }, null, 2) }],
             isError: true,
             details: {}
           };
         }
 
-        if (!params.instruction || !params.instruction.trim()) {
-          log('warn', "Validation failed: instruction parameter is missing");
+        if (!params.update_snippet || !params.update_snippet.trim()) {
+          log('warn', "Validation failed: update_snippet parameter is missing");
           return {
             content: [{ type: "text", text: JSON.stringify({
               success: false,
               error: "VALIDATION_ERROR",
-              details: "instruction parameter is required.",
+              details: "update_snippet parameter is required.",
             }, null, 2) }],
             isError: true,
             details: {}
@@ -774,15 +772,15 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // Use source as anchor if not specified
-        const anchor = params.anchor || params.source;
+        // Use original_code as anchor if not specified
+        const anchor = params.anchor || params.original_code;
         log('debug', `Using anchor: ${anchor.substring(0, 50)}...`);
 
-        // Perform merge (validation of source and instruction is handled there)
+        // Perform merge (validation of inputs is handled there)
         const mergeParams: MergeParams = {
           file: params.file,
-          source: params.source,
-          instruction: params.instruction,
+          original_code: params.original_code,
+          update_snippet: params.update_snippet,
           anchor: anchor,
           endpoint_url: params.endpoint_url,
           model_name: params.model_name,

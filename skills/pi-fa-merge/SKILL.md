@@ -1,13 +1,13 @@
 ---
 name: pi-fa-merge
-description: Fast-apply merge tool for AI coding agents, based on the kortix-ai/fast-apply specification. Transforms source code based on natural language instructions using OpenAI-compatible endpoints. Use when you need to efficiently transform code by describing changes in natural language.
+description: Fast-apply merge tool for AI coding agents, based on the kortix-ai/fast-apply specification. Merges an update snippet (code) into original code using OpenAI-compatible endpoints. Use when you need to efficiently apply a code change with a fast-apply model.
 ---
 
 # pi-fa-merge: Fast-Apply Merge Skill
 
 ## Overview
 
-pi-fa-merge provides a high-speed, low-cost code transformation capability for AI coding agents. It transforms source code based on natural language instructions using fast-apply models, and writes the transformed result directly to a target file using hash-verified scope matching. This avoids full file regeneration and provides atomic, safe file updates.
+pi-fa-merge provides a high-speed, low-cost code merging capability for AI coding agents. It merges an update snippet (code) into original code using fast-apply models, and writes the merged result directly to a target file using hash-verified scope matching. The agent supplies only the changed code instead of regenerating the whole file, and file updates are atomic and safe.
 
 This skill implements the [**kortix-ai/fast-apply**](https://github.com/kortix-ai/fast-apply) specification developed by [Kortix](https://kortix.ai), which defines the tag-based prompt format (`<code>`, `<update>`, `<updated-code>`) and dedicated model interfaces for efficient code transformation.
 
@@ -53,8 +53,8 @@ The package provides a `fa_merge` tool that can be called directly:
 ```
 fa_merge({
   file: "/path/to/target/file.py",
-  source: "def hello():\n    return 'world'",
-  instruction: "Change the return value to 'universe'",
+  original_code: "def hello():\n    return 'world'",
+  update_snippet: "def hello():\n    return 'universe'",
   endpoint_url: "https://api.fireworks.ai/inference/v1",  // optional
   model_name: "fast-apply-7b"  // optional
 })
@@ -65,11 +65,20 @@ fa_merge({
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `file` | **Yes** | **Path to the file to edit (relative or absolute)** |
-| `source` | **Yes** | **Current content to transform (must be exact)** |
-| `instruction` | **Yes** | **Natural language description of the desired change** |
-| `anchor` | No | Exact text to match in the file (defaults to source) |
+| `original_code` | **Yes** | **The complete original code to modify (must be exact)** |
+| `update_snippet` | **Yes** | **Code snippet with the changes to apply (see format below)** |
+| `anchor` | No | Exact text to match in the file (defaults to `original_code`) |
 | `endpoint_url` | No | Base URL of the OpenAI-compatible endpoint |
 | `model_name` | No | Model name to use (defaults to `fast-apply-7b`) |
+
+### Update Snippet Format
+
+`update_snippet` follows the kortix-ai/fast-apply data format (what the models were fine-tuned on):
+
+- Include **only the new or modified code** — do not repeat unchanged parts unnecessarily.
+- Provide enough context to indicate placement: **at least one line before and after** the changed region, or a clear position marker.
+- Use ellipsis comments (e.g. `// ... existing code ...`) **only** when significant portions are omitted. Do not use them for a complete file replacement.
+- The snippet must be an **exact subset of the final code**.
 
 ### Response Format
 
@@ -97,33 +106,39 @@ On error:
 ### Basic File Edit
 
 ```python
-# Source code to transform (exact content from the file)
-source = """
+# Original code (exact content from the file)
+original_code = """
 class Calculator:
     def add(self, a, b):
         return a + b
 """
 
-# Natural language instruction
-instruction = "Add a subtract method that returns a - b"
+# Update snippet: the changed region with one context line around it
+update_snippet = """
+    def add(self, a, b):
+        return a + b
+
+    def subtract(self, a, b):
+        return a - b
+"""
 
 # Call fa_merge - file is directly updated
 result = fa_merge({
     "file": "/path/to/calculator.py",
-    "source": source,
-    "instruction": instruction
+    "original_code": original_code,
+    "update_snippet": update_snippet
 })
 ```
 
 ### Complete File Replacement
 
-For complete file replacement, use the entire file content as the source:
+For complete file replacement, pass the entire new file as the update snippet (no ellipsis markers):
 
 ```python
 result = fa_merge({
     "file": "/path/to/file.py",
-    "source": entire_file_content,
-    "instruction": "Rewrite the entire file to implement new functionality"
+    "original_code": entire_file_content,
+    "update_snippet": entire_new_file_content
 })
 ```
 

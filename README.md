@@ -1,6 +1,6 @@
 # pi-fa-merge
 
-Fast-apply merge tool for AI coding agents, based on the [**kortix-ai/fast-apply**](https://github.com/kortix-ai/fast-apply) specification developed by [Kortix](https://kortix.ai). Transforms source code based on natural language instructions using fast-apply models, and writes the result directly to a file using hash-verified scope matching.
+Fast-apply merge tool for AI coding agents, based on the [**kortix-ai/fast-apply**](https://github.com/kortix-ai/fast-apply) specification developed by [Kortix](https://kortix.ai). Merges an update snippet (code) into original code using fast-apply models, and writes the result directly to a file using hash-verified scope matching.
 
 This tool supports **any OpenAI-compatible endpoint** serving fast-apply models, making it portable across different hosting environments.
 
@@ -9,7 +9,7 @@ This tool supports **any OpenAI-compatible endpoint** serving fast-apply models,
 - **fast-apply compliant**: Optimized for the `kortix-ai/fast-apply` prompt format and dedicated models, maximizing LLM performance.
 - **OpenAI-compatible**: Connects to any OpenAI-compatible API endpoint serving fast-apply models.
 - **High speed**: Uses fast-apply models for rapid code transformation
-- **Low token cost**: The agent describes the change instead of regenerating the code itself
+- **Low token cost**: The agent supplies only the changed code instead of regenerating the whole file
 - **Deterministic**: Temperature 0 ensures consistent results
 - **Retry support**: Automatic exponential backoff for rate limits
 - **Direct file write**: Writes transformed code directly to target file with hash-verified scope matching
@@ -67,7 +67,7 @@ FAST_APPLY_MODEL_NAME="fast-apply-7b"
 # Optional: Path to the anchoredit binary
 ANCHOREDIT_BIN="anchoredit"
 
-# Optional: Maximum number of lines allowed for source (default: 500)
+# Optional: Maximum number of lines allowed for original_code (default: 500)
 # FAST_APPLY_MAX_LINES=500
 
 # Optional: Request timeout in milliseconds (default: 60000)
@@ -83,8 +83,8 @@ ANCHOREDIT_BIN="anchoredit"
 ```typescript
 fa_merge({
   file: "/path/to/target/file.py",
-  source: "// current code to transform",
-  instruction: "Describe the changes you want to make",
+  original_code: "def hello():\n    return 'world'",
+  update_snippet: "def hello():\n    return 'universe'",
   endpoint_url: "https://api.fireworks.ai/inference/v1", // optional
   model_name: "fast-apply-7b" // optional
 })
@@ -95,11 +95,20 @@ fa_merge({
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `file` | String | **Yes** | **Path to the file to edit (relative or absolute)** |
-| `source` | String | **Yes** | **Current content to transform (must be exact)** |
-| `instruction` | String | **Yes** | **Natural language description of the desired change** |
-| `anchor` | String | Optional | Exact text to match in the file (defaults to source) |
+| `original_code` | String | **Yes** | **The complete original code to modify (must be exact)** |
+| `update_snippet` | String | **Yes** | **Code snippet with the changes to apply (see format below)** |
+| `anchor` | String | Optional | Exact text to match in the file (defaults to `original_code`) |
 | `endpoint_url` | String | Optional | The base URL of the OpenAI-compatible endpoint |
 | `model_name` | String | Optional | Model name to use (defaults to `fast-apply-7b`) |
+
+### Update Snippet Format
+
+`update_snippet` follows the kortix-ai/fast-apply data format (what the models were fine-tuned on):
+
+- Include **only the new or modified code** — do not repeat unchanged parts unnecessarily.
+- Provide enough context to indicate placement: **at least one line before and after** the changed region, or a clear position marker.
+- Use ellipsis comments (e.g. `// ... existing code ...`) **only** when significant portions are omitted. Do not use them for a complete file replacement.
+- The snippet must be an **exact subset of the final code**.
 
 ### Using the Skill
 
@@ -112,20 +121,23 @@ fa_merge({
 ### Basic File Edit
 
 ```python
-# Source code to transform (exact content from the file)
-source = """
+# Original code (exact content from the file)
+original_code = """
 def calculate_total(price, tax):
     return price * (1 + tax)
 """
 
-# Natural language instruction
-instruction = "Add a get_version function that returns '1.0.0'"
+# Update snippet: only the new code, appended at the end
+update_snippet = """
+def get_version():
+    return '1.0.0'
+"""
 
 # Result - file is directly updated
 result = fa_merge({
     "file": "/path/to/calculator.py",
-    "source": source,
-    "instruction": instruction
+    "original_code": original_code,
+    "update_snippet": update_snippet
 })
 
 # Output:
@@ -139,10 +151,11 @@ result = fa_merge({
 
 ```python
 # Replace entire file content
+# (complete file replacement: pass the full new file, no ellipsis markers)
 result = fa_merge({
     "file": "/path/to/file.py",
-    "source": entire_file_content,
-    "instruction": "Rewrite the entire file to implement new functionality"
+    "original_code": entire_file_content,
+    "update_snippet": entire_new_file_content
 })
 ```
 

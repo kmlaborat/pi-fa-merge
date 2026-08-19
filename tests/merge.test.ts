@@ -41,25 +41,29 @@ describe('Merge Tool', () => {
   });
 
   describe('buildPrompt', () => {
-    test('returns system + user messages (fast-apply inference structure)', () => {
-      const messages = buildPrompt('def f():\n    pass', 'add docstring');
-      expect(messages.map((m) => m.role)).toEqual(['system', 'user']);
-    });
+    const ORIGINAL = 'def f():\n    pass';
+    const SNIPPET = '// context line\ndef f():\n    pass\n// context line';
 
-    test('embeds source code inside <code> tags', () => {
-      const [, user] = buildPrompt('def f():\n    pass', 'add docstring');
-      expect(user.content).toContain('<code>\ndef f():\n    pass\n</code>');
-    });
+    test('matches the fast-apply fine-tuning template byte-for-byte', () => {
+      const [system, user] = buildPrompt(ORIGINAL, SNIPPET);
 
-    test('embeds instruction inside <update> tags', () => {
-      const [, user] = buildPrompt('def f():\n    pass', 'add docstring');
-      expect(user.content).toContain('<update>\nadd docstring\n</update>');
-    });
+      expect(system.role).toBe('system');
+      // Includes the "an coding assistant" typo of the upstream training data
+      expect(system.content).toBe(
+        'You are an coding assistant that helps merge code updates, ensuring every modification is fully integrated.',
+      );
+      expect(user.role).toBe('user');
+      // Inline tags: <code>...</code> and <update>...</update> on one line each
+      expect(user.content).toBe(`Merge all changes from the <update> snippet into the <code> below.
+- Preserve the code's structure, order, comments, and indentation exactly.
+- Output only the updated code, enclosed within <updated-code> and </updated-code> tags.
+- Do not include any additional text, explanations, placeholders, ellipses, or code fences.
 
-    test('instructs the model to output <updated-code> tags', () => {
-      const [, user] = buildPrompt('def f():\n    pass', 'change body');
-      expect(user.content).toContain('<updated-code>');
-      expect(user.content).toContain('</updated-code>');
+<code>${ORIGINAL}</code>
+
+<update>${SNIPPET}</update>
+
+Provide the complete updated code.`);
     });
   });
 
@@ -494,8 +498,8 @@ def f():
       ).join('\n');
       const result = await performMerge({
         file: '/tmp/unused.py',
-        source,
-        instruction: 'noop',
+        original_code: source,
+        update_snippet: '// existing code',
       });
       expect(result.success).toBe(false);
       expect(result.error).toBe('FILE_TOO_LARGE');
@@ -506,8 +510,8 @@ def f():
       try {
         const result = await performMerge({
           file: '/tmp/unused.py',
-          source: 'x = 1',
-          instruction: 'noop',
+          original_code: 'x = 1',
+          update_snippet: 'x = 2',
         });
         expect(result.success).toBe(false);
         expect(result.error).toBe('PROVIDER_AUTH_FAILED');
