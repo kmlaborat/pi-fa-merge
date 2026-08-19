@@ -1,0 +1,88 @@
+# pi-fa-merge — ToDo / セッション引き継ぎドキュメント
+
+| 項目 | 内容 |
+|------|------|
+| 更新日 | 2026-08-19 |
+| 最新コミット | `9549fe2` + この文書追加コミット(`/reload-fa-env` 改名。最新は `git log -2` で確認) |
+| リポジトリ | `C:\Users\Game\MyDevEnv\wd\pi-fa-merge`(リモート: github.com/kmlaborat/pi-fa-merge) |
+| インストール先 | `C:\Users\Game\MyDevEnv\.home\.pi\agent\git\github.com\kmlaborat\pi-fa-merge`(`9549fe2` まで pull 済み、`.env` は存在) |
+| 前提PJ | `C:\Users\Game\MyDevEnv\wd\AnchorScope` / `AnchorEdit`(v2、`main` clean。AnchorScope はライブラリ依存。`anchoredit` バイナリ v2.0.0 はインストール済み — 修正なければ再 `cargo install` 不要) |
+
+## プロジェクト概要
+
+kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `original_code` + `update_snippet`(コード)を渡し、fast-apply モデルがマージした結果を `anchoredit`(hash 検証付き)でファイルに直接書き込む。OpenAI 互換エンドポイント任意。runtime 依存ゼロ(Node 標準 + pi フレームワーク + typebox のみ)。
+
+## 主要ファイル
+
+| パス | 内容 |
+|------|------|
+| `extensions/index.ts` | ツール `fa_merge` + スラッシュコマンド `/reload-fa-env` + 全ロジック(純粋関数は export 済み) |
+| `extensions/env.ts` | `.env` ローダー(pi-fc-search と同設計、`tests/env.test.ts` で直接テスト) |
+| `tests/merge.test.ts` / `tests/env.test.ts` | 実関数の直接ユニットテスト計 59 件 |
+| `docs/SPEC.md` | 契約(パラメータ・エラー種別・受け入れテスト)。実装と同期済み |
+| `skills/pi-fa-merge/SKILL.md` | エージェント向けスキル |
+
+## 確定した設計判断(勝手に変えないこと)
+
+1. **純粋 fast-apply 意味論**: パラメータは `original_code` + `update_snippet`(v2 の `source`/`instruction` は廃止)。`update_snippet` は**自然言語ではなくコード**(変更コードのみ + 前後コンテキスト行 + `... existing code ...` 省略マーカー、最終コードの正確な部分集合)。
+2. **prompt はファインチューニング学習テンプレートとバイト一致**: system("You are **an** coding assistant..."、upstream の typo を含む)/ user(インラインタグ `<code>{...}</code>` / `<update>{...}</update>`)。`buildPrompt` のテストが完全一致をアサートしている。
+3. **`.env` ロード規則**(pi-fc-search 整合):
+   - `FAST_APPLY_*` / `ANCHOREDIT_*` プレフィックスのキーのみ適用(他は無視+警告。`PATH=...` 等によるホストプロセス横取り防止)
+   - **パッケージの `.env` が単一の信頼源 → process.env を上書き**(標準 dotenv と逆の優先順位)。理由: エージェントが env を誤変換しても `.env` の値に復帰できる
+   - `import.meta.url` ベースでパッケージルートの `.env` のみ(旧実装の cwd/`__dirname` 3候補試行は廃止)
+   - `.env` から削除したキーは process.env から消えない(書き込みのみ。pi 再起動でクリア)
+4. **`/reload-fa-env`**: 実行時に `.env` を再読込(pi 再起動不要)。pi-fc-search は `/reload-env` なので、**衝突回避と明示性のため `reload-fa-env`**。設定は各 `fa_merge` 呼び出し時に process.env から解決されるため、再読込→次回呼び出しで反映。
+5. **Windows argv 上限対策**: 1000 文字超の anchor/replacement は一時ファイル + `--anchor-file`/`--replacement-file`(installed anchoredit 2.0.0 がサポート)。`finally` でクリーンアップ。
+6. **エラー種別**: 行超過は `FILE_TOO_LARGE`(VALIDATION_ERROR ではない)、retry は `ApiError.status` ベース(429/5xx。メッセージ部分一致は廃止)。
+7. **成功時返却**: JSON `{success: true, updated_code}`。
+8. **`parseOutput`**: 抽出コードの先頭・末尾改行を**各1行だけ**除去(`trim()` 禁止 — 意図的な空行を破壊するため)。
+9. **Node >= 22.19**(pi-coding-agent の engines 要件。CI は Node 22)。
+
+## 前回セッションの作業履歴(要約)
+
+| コミット | 内容 |
+|---|---|
+| `1671b25` | テストを実装に接続(純粋関数 export + 直接テスト化) |
+| `81f3c6e` | Windows argv 上限対策(一時ファイル + `-file` フラグ) |
+| `0a8789b` | SPEC/README/SKILL の v2 契約同期(後に 6 で一部逆行) |
+| `1525b97` | prompt を upstream 推論フォーマットに完全一致、成功時 JSON、`FILE_TOO_LARGE`、`.env`/getter/API 応答のガード |
+| `ee6533e` | `ApiError` status 判定、デッドコード削除、CI 依存チェック強化、strict tsconfig、vitest.config.mts |
+| `95da96b` | **fast-apply 純粋回帰**(`original_code`/`update_snippet`、学習テンプレートとバイト一致) |
+| `7978738` | CI Node 20→22(pi-coding-agent が >=22.19 を要求) |
+| `9549fe2` | `.env` ロードの pi-fc-search 整合 + `/reload-env` 追加(→ 次コミットで `reload-fa-env` に改名) |
+
+## 次のやること(優先度順)
+
+### 1. 実測ベースライン — fast-apply の本来の性能 ⭐
+目的: 純粋 fast-apply(分布内)の精度を定量し、自然言語実験の比較基準にする。
+
+- **評価ハーネス設計**
+  - ケース: upstream データセット `Kortix/FastApply-dataset-v1.0`(HF)から 10〜30 件抽出(TS/Python 混合、サイズ帯を混ぜる)。`original_code` / `update_snippet` / `final_code`(ground truth)の3列で構成
+  - 実行: 実 `.env` のエンドポイントに対して `fa_merge` の中核(`buildPrompt` → `callOpenAiCompatibleApi` → `parseOutput`)を直接駆動(ファイル書き込みは不要)
+  - 指標: 完全一致率(whitespace 無視も併記)、行単位一致率、`parseOutput`/構造検証通過率、MALFORMED/STRUCTURE_MANGLE の内訳、レイテンシ、推定トークン
+  - ハーネスの置き場所候補: `harness/`(pi-fc-search が同様の構成: `run.mjs` / `results/`)
+- **baseline 計測 → 結果を `harness/results/` に保存**
+- 副産物: 実エンドポイント + anchoredit 書き込みのエンドツーエンド初回確認
+
+### 2. 自然言語 A/B 実験
+- baseline 確定後、`update_snippet` を自然言語指示に置換(または併記)して同条件で再計測
+- 精度劣化を定量 → 「自然言語サポートを入れる/入れない/オプションにする」を判断
+- 参考: fast-apply はコードスニペットでファインチューニングされており、自然言語は**分布外**。劣化が大きいなら fast-apply 維持が合理的
+
+### 3. リリース準備(破壊的変更)
+- `source`/`instruction` → `original_code`/`update_snippet` は破壊的 → version `2.0.0` → **`3.0.0`** + git tag
+- CHANGELOG 作成(上記作業履歴 + `/reload-fa-env` 改名)
+- README の version 表記など整合確認
+
+### 4. 軽微項(任意)
+- lint の実導入(現在 `npm run lint` は placeholder。README/CI では非ブロッキングと明記済み)
+- 実測で構造検証(`validateStructure`)の偽検知率が出るようなら閾値チューニング(特に先頭 20% prefix 必須チェックは shebang/docstring 追加時に誤爆しうる)
+
+## 注意事項 / 実務メモ
+
+- **拡張コードの変更は pi セッション再起動で反映**(pi 拡張はセッション開始時にロード)。`/reload-fa-env` は `.env` 再読込のみで、コード反映にはならない。
+- `.env`(インストール先)に実 API キーがある — コミットしないこと(`.gitignore` 済み)。実測(ToDo 1)で使う。
+- `docs/refactoring-plan-v2.md` は gitignore 済みのローカル文書で、**内容(v2 の自然言語設計)は 95da96b で撤回済み**。新しい判断材料にはしないこと。
+- fast-apply 仕様の一次情報は `https://github.com/kortix-ai/fast-apply`(README の推論プロンプト + `notebooks/Fine-Tuning__FastApply-7B-Instruct.ipynb` の `formatting_prompts_func` が学習データ形式の正体。README と学習テンプレートで "a/an coding" が微妙に違うが、**学習テンプレート側(an)に合わせる**)。
+- anchoredit CLI(本セッションで実証): anchor 文字列が `-` で始まると clap がフラグと誤認する — 編集ツールで扱うときは anchor を非ダッシュ文字で始めるか `-file` フラグを使う。
+- 成功/失敗の CI 確認は `curl https://api.github.com/repos/kmlaborat/pi-fa-merge/actions/runs?per_page=1` でポーリング可能(ログ本体は未認証では取得不可。ジョブの steps conclusion まで見られる)。

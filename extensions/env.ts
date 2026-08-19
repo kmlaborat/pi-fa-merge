@@ -3,7 +3,7 @@
  *
  * Single source of truth for loading FAST_APPLY_* / ANCHOREDIT_* variables
  * from the package-root `.env` file. Idempotent — safe to call at module
- * init, and re-runnable at runtime via the /reload-env command.
+ * init, and re-runnable at runtime via the /reload-fa-env command.
  */
 
 import { existsSync, readFileSync } from "fs";
@@ -32,7 +32,7 @@ function hasAllowedPrefix(key: string): boolean {
  * environment (the reverse of standard dotenv precedence). Stale
  * shell/CI exports — or environment mutations made by mistake — must not
  * silently shadow what the user configured in the package .env. The
- * /reload-env command re-applies the file, which is also the recovery
+ * /reload-fa-env command re-applies the file, which is also the recovery
  * path when the environment has been clobbered.
  *
  * Returns the list of ignored (non-prefixed) keys, for callers that want
@@ -73,7 +73,7 @@ export function applyEnvContent(
 }
 
 /**
- * Result of a .env (re)load. Lets the /reload-env command report exactly
+ * Result of a .env (re)load. Lets the /reload-fa-env command report exactly
  * what happened without re-parsing the file itself.
  */
 export interface ReloadEnvResult {
@@ -100,7 +100,7 @@ export function getEnvPath(): string {
  * process.env.
  *
  * Re-runnable: this performs the file read on EVERY call, so editing the
- * .env file and re-invoking (via /reload-env) picks up new values without
+ * .env file and re-invoking (via /reload-fa-env) picks up new values without
  * a pi restart. Configuration is resolved per fa_merge call from
  * process.env, so the next call uses the corrected configuration.
  *

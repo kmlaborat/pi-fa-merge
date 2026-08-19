@@ -27,7 +27,7 @@ import { loadEnvFile, reloadEnvFile } from "./env";
 //
 // Only FAST_APPLY_* / ANCHOREDIT_* keys are loaded, and the package .env
 // overrides the process environment (single source of truth). Re-apply at
-// runtime with the /reload-env command (registered in the factory below).
+// runtime with the /reload-fa-env command (registered in the factory below).
 // ============================================================================
 
 // Load environment variables from the package .env at module initialization
@@ -632,8 +632,10 @@ export default function (pi: ExtensionAPI) {
   // FAST_APPLY_*/ANCHOREDIT_* keys makes edits take effect on the NEXT
   // call — no pi restart needed. This is also the recovery path when the
   // process environment has been modified by mistake.
-  // (Aligned with pi-fc-search's /reload-env command.)
-  pi.registerCommand("reload-env", {
+  // (Aligned with pi-fc-search's /reload-env command; named reload-fa-env
+  // to make the target explicit and avoid a name collision when both
+  // packages are installed.)
+  pi.registerCommand("reload-fa-env", {
     description: "Re-read pi-fa-merge/.env without restarting pi (applies FAST_APPLY_* / ANCHOREDIT_* to the next fa_merge call)",
     handler: async (_args, ctx) => {
       const result = reloadEnvFile();
@@ -718,7 +720,7 @@ export default function (pi: ExtensionAPI) {
       });
       
       try {
-        // Resolve the anchoredit binary per call so /reload-env changes apply
+        // Resolve the anchoredit binary per call so /reload-fa-env changes apply
         const bin = getAnchorEditBin();
 
         // Validate file and source parameters
