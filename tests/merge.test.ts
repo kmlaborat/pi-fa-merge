@@ -16,6 +16,10 @@ import {
   writePayloadTempFile,
   removeTempFile,
   MAX_ARGV_PAYLOAD_CHARS,
+  performMerge,
+  callOpenAiCompatibleApi,
+  getMaxCodeLines,
+  getRequestTimeoutMs,
 } from '../extensions/index';
 import {
   setupTestFixtures,
@@ -36,20 +40,25 @@ describe('Merge Tool', () => {
   });
 
   describe('buildPrompt', () => {
+    test('returns system + user messages (fast-apply inference structure)', () => {
+      const messages = buildPrompt('def f():\n    pass', 'add docstring');
+      expect(messages.map((m) => m.role)).toEqual(['system', 'user']);
+    });
+
     test('embeds source code inside <code> tags', () => {
-      const prompt = buildPrompt('def f():\n    pass', 'add docstring');
-      expect(prompt).toContain('<code>\ndef f():\n    pass\n</code>');
+      const [, user] = buildPrompt('def f():\n    pass', 'add docstring');
+      expect(user.content).toContain('<code>\ndef f():\n    pass\n</code>');
     });
 
     test('embeds instruction inside <update> tags', () => {
-      const prompt = buildPrompt('def f():\n    pass', 'add docstring');
-      expect(prompt).toContain('<update>\nadd docstring\n</update>');
+      const [, user] = buildPrompt('def f():\n    pass', 'add docstring');
+      expect(user.content).toContain('<update>\nadd docstring\n</update>');
     });
 
     test('instructs the model to output <updated-code> tags', () => {
-      const prompt = buildPrompt('def f():\n    pass', 'change body');
-      expect(prompt).toContain('<updated-code>');
-      expect(prompt).toContain('</updated-code>');
+      const [, user] = buildPrompt('def f():\n    pass', 'change body');
+      expect(user.content).toContain('<updated-code>');
+      expect(user.content).toContain('</updated-code>');
     });
   });
 
@@ -156,6 +165,41 @@ def helper():
       expect(result.success).toBe(false);
       expect(result.error).toBe('STRUCTURE_MANGLE_ERROR');
       expect(result.details).toContain('calculate_total');
+    });
+
+    test('preserves extra leading blank lines (only one artifact newline is stripped)', () => {
+      const rawResponse = `<updated-code>
+
+def f():
+    pass
+</updated-code>`;
+
+      const result = parseOutput(
+        rawResponse,
+        `def f():
+    return 1`,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.updated_code).toBe('\ndef f():\n    pass');
+    });
+
+    test('preserves extra trailing blank lines (only one artifact newline is stripped)', () => {
+      const rawResponse = `<updated-code>
+def f():
+    pass
+
+
+</updated-code>`;
+
+      const result = parseOutput(
+        rawResponse,
+        `def f():
+    return 1`,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.updated_code).toBe('def f():\n    pass\n\n');
     });
   });
 
@@ -412,6 +456,114 @@ def f():
       await expect(
         removeTempFile('/tmp/fa-merge-does-not-exist.tmp'),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('performMerge validation', () => {
+    const originalKey = process.env.FAST_APPLY_API_KEY;
+
+    beforeAll(() => {
+      process.env.FAST_APPLY_API_KEY = 'test-key';
+    });
+
+    afterAll(() => {
+      if (originalKey === undefined) {
+        delete process.env.FAST_APPLY_API_KEY;
+      } else {
+        process.env.FAST_APPLY_API_KEY = originalKey;
+      }
+    });
+
+    test('FILE_TOO_LARGE when source exceeds max lines', async () => {
+      const source = Array.from(
+        { length: 501 },
+        (_, i) => `# line ${i}`,
+      ).join('\n');
+      const result = await performMerge(
+        { file: '/tmp/unused.py', source, instruction: 'noop' },
+        {} as never,
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('FILE_TOO_LARGE');
+    });
+
+    test('PROVIDER_AUTH_FAILED when API key is missing', async () => {
+      delete process.env.FAST_APPLY_API_KEY;
+      try {
+        const result = await performMerge(
+          { file: '/tmp/unused.py', source: 'x = 1', instruction: 'noop' },
+          {} as never,
+        );
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('PROVIDER_AUTH_FAILED');
+      } finally {
+        process.env.FAST_APPLY_API_KEY = 'test-key';
+      }
+    });
+  });
+
+  describe('config getters', () => {
+    const savedMax = process.env.FAST_APPLY_MAX_LINES;
+    const savedTimeout = process.env.FAST_APPLY_TIMEOUT;
+
+    afterAll(() => {
+      if (savedMax === undefined) delete process.env.FAST_APPLY_MAX_LINES;
+      else process.env.FAST_APPLY_MAX_LINES = savedMax;
+      if (savedTimeout === undefined) delete process.env.FAST_APPLY_TIMEOUT;
+      else process.env.FAST_APPLY_TIMEOUT = savedTimeout;
+    });
+
+    test('falls back to defaults for invalid values', () => {
+      process.env.FAST_APPLY_MAX_LINES = 'abc';
+      expect(getMaxCodeLines()).toBe(500);
+      process.env.FAST_APPLY_MAX_LINES = '-5';
+      expect(getMaxCodeLines()).toBe(500);
+      process.env.FAST_APPLY_TIMEOUT = 'not-a-number';
+      expect(getRequestTimeoutMs()).toBe(60000);
+    });
+
+    test('parses valid values', () => {
+      process.env.FAST_APPLY_MAX_LINES = '100';
+      expect(getMaxCodeLines()).toBe(100);
+      process.env.FAST_APPLY_TIMEOUT = '5000';
+      expect(getRequestTimeoutMs()).toBe(5000);
+    });
+  });
+
+  describe('callOpenAiCompatibleApi', () => {
+    const originalFetch = globalThis.fetch;
+
+    afterAll(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    const messages = [{ role: 'user' as const, content: 'hi' }];
+
+    test('returns content from a valid response', async () => {
+      globalThis.fetch = (async () =>
+        Response.json({ choices: [{ message: { content: 'ok' } }] })) as typeof fetch;
+
+      await expect(
+        callOpenAiCompatibleApi('http://localhost:9/v1', 'key', 'model', messages),
+      ).resolves.toBe('ok');
+    });
+
+    test('rejects malformed responses (missing choices)', async () => {
+      globalThis.fetch = (async () =>
+        Response.json({ choices: [] })) as typeof fetch;
+
+      await expect(
+        callOpenAiCompatibleApi('http://localhost:9/v1', 'key', 'model', messages),
+      ).rejects.toThrow(/malformed response/);
+    });
+
+    test('throws on non-ok status', async () => {
+      globalThis.fetch = (async () =>
+        new Response('Unauthorized', { status: 401, statusText: 'Unauthorized' })) as typeof fetch;
+
+      await expect(
+        callOpenAiCompatibleApi('http://localhost:9/v1', 'key', 'model', messages),
+      ).rejects.toThrow(/401/);
     });
   });
 });

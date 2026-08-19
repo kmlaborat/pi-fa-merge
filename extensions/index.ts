@@ -55,7 +55,10 @@ function loadEnvFile(): void {
             value = value.slice(1, -1);
           }
           
-          process.env[key] = value;
+          // Do not override variables already set in the environment
+          if (process.env[key] === undefined) {
+            process.env[key] = value;
+          }
         }
         
         return; // Found and loaded .env file
@@ -124,12 +127,14 @@ const REQUEST_TIMEOUT_MS = 60000;
 const MAX_CONTEXT_TOKENS = 8192;
 
 // Configurable via environment variables
-function getMaxCodeLines(): number {
-  return parseInt(process.env.FAST_APPLY_MAX_LINES ?? '500', 10);
+export function getMaxCodeLines(): number {
+  const value = parseInt(process.env.FAST_APPLY_MAX_LINES ?? '500', 10);
+  return Number.isFinite(value) && value > 0 ? value : 500;
 }
 
-function getRequestTimeoutMs(): number {
-  return parseInt(process.env.FAST_APPLY_TIMEOUT ?? '60000', 10);
+export function getRequestTimeoutMs(): number {
+  const value = parseInt(process.env.FAST_APPLY_TIMEOUT ?? '60000', 10);
+  return Number.isFinite(value) && value > 0 ? value : 60000;
 }
 
 // ============================================================================
@@ -274,41 +279,42 @@ export function resolveFilePath(filePath: string, cwd: string): string {
 //
 // The prompt uses the fast-apply tag structure: <code>,
 // <update>, and expects output wrapped in <updated-code> tags.
+//
+// NOTE: This prompt intentionally follows the kortix-ai/fast-apply
+// inference prompt structure (system + user messages) because the
+// fast-apply models are fine-tuned on exactly this format.
 // ============================================================================
 
-export function buildPrompt(source: string, instruction: string): string {
-  return `You are a code transformation assistant. Your job is to transform the source code according to the instruction.
+export interface PromptMessage {
+  role: "system" | "user";
+  content: string;
+}
 
-Source code:
+export function buildPrompt(source: string, instruction: string): PromptMessage[] {
+  return [
+    {
+      role: "system",
+      content:
+        "You are a coding assistant that helps merge code updates, ensuring every modification is fully integrated.",
+    },
+    {
+      role: "user",
+      content: `Merge all changes from the <update> snippet into the <code> below.
+- Preserve the code's structure, order, comments, and indentation exactly.
+- Output only the updated code, enclosed within <updated-code> and </updated-code> tags.
+- Do not include any additional text, explanations, placeholders, ellipses, or code fences.
+
 <code>
 ${source}
 </code>
 
-Instruction (the changes to apply):
 <update>
 ${instruction}
 </update>
 
-Instructions:
-1. Analyze the source code and the instruction
-2. Determine what changes are needed
-3. Apply the changes to the source code while preserving all other content
-4. Maintain proper indentation, comments, and code structure
-5. Output ONLY the complete transformed code wrapped in <updated-code> tags
-
-CRITICAL REQUIREMENTS:
-- Do NOT omit any part of the source code
-- Do NOT use ellipsis (...) or any abbreviation to skip code
-- Output MUST include ALL lines from the source code, from line 1 to the last line
-- The transformed code must be COMPLETE and SELF-CONTAINED
-- Do NOT truncate the beginning or end of the code
-- If the source code has 100 lines, your output should have at least 100 lines (plus any additions)
-
-Output format:
-<updated-code>
-[your complete transformed code here - include EVERY line]
-</updated-code>
-`;
+Provide the complete updated code.`,
+    },
+  ];
 }
 
 // ============================================================================
@@ -407,13 +413,16 @@ export function parseOutput(rawResponse: string, source: string): MergeResult {
     };
   }
 
-  const extracted = rawResponse.substring(contentStart, closeIndex).trim();
+  // Remove exactly one leading/trailing newline (common LLM output
+  // artifacts) while preserving any additional blank lines verbatim.
+  let code = rawResponse.substring(contentStart, closeIndex);
+  if (code.startsWith("\n")) code = code.slice(1);
+  if (code.endsWith("\n")) code = code.slice(0, -1);
 
   // Remove markdown code block markers if present
-  let code = extracted;
   const codeBlockMatch = code.match(/^```[^\n]*\n?([\s\S]*?)\n?```$/);
   if (codeBlockMatch) {
-    code = codeBlockMatch[1].trim();
+    code = codeBlockMatch[1];
   }
 
   // Structure validation
@@ -439,11 +448,11 @@ export function parseOutput(rawResponse: string, source: string): MergeResult {
 // Uses the standard Chat Completions API format.
 // ============================================================================
 
-async function callOpenAiCompatibleApi(
+export async function callOpenAiCompatibleApi(
   endpointUrl: string,
   apiKey: string,
   modelName: string,
-  prompt: string
+  messages: PromptMessage[]
 ): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = getRequestTimeoutMs();
@@ -461,12 +470,7 @@ async function callOpenAiCompatibleApi(
       },
       body: JSON.stringify({
         model: modelName,
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
+        messages,
         temperature: 0,
       }),
       signal: controller.signal,
@@ -477,8 +481,14 @@ async function callOpenAiCompatibleApi(
     }
 
     const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content;
+    if (typeof content !== "string") {
+      throw new Error(
+        "API error: malformed response (missing choices[0].message.content)"
+      );
+    }
     log('debug', "API response received");
-    return data.choices[0].message.content;
+    return content;
   } finally {
     clearTimeout(timeout);
   }
@@ -526,7 +536,7 @@ export function isRetryable(error: unknown): boolean {
 // Merge Operation
 // ============================================================================
 
-async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise<MergeResult> {
+export async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise<MergeResult> {
   const endpointUrl = params.endpoint_url || process.env.FAST_APPLY_ENDPOINT_URL || DEFAULT_ENDPOINT_URL;
   const modelName = params.model_name || process.env.FAST_APPLY_MODEL_NAME || DEFAULT_MODEL_NAME;
 
@@ -584,22 +594,22 @@ async function performMerge(params: MergeParams, ctx: ExtensionContext): Promise
     log('warn', `Source too large: ${lineCount} lines exceeds maximum of ${maxLines} lines`);
     return {
       success: false,
-      error: "VALIDATION_ERROR",
+      error: "FILE_TOO_LARGE",
       details: `Source too large: ${lineCount} lines exceeds maximum of ${maxLines} lines. Please split the source or process in smaller chunks.`,
     };
   }
 
   log('debug', `Processing source with ${lineCount} lines, estimated ${estimatedTokens} tokens`);
 
-  // Build prompt using kortix-ai/fast-apply tag structure
-  const prompt = buildPrompt(params.source, params.instruction);
+  // Build prompt using the kortix-ai/fast-apply inference prompt structure
+  const messages = buildPrompt(params.source, params.instruction);
 
   // Call API with retry
   let rawResponse: string;
   try {
     log('info', "Calling API endpoint");
     rawResponse = await withRetry(async () => {
-      return callOpenAiCompatibleApi(endpointUrl, apiKey, modelName, prompt);
+      return callOpenAiCompatibleApi(endpointUrl, apiKey, modelName, messages);
     });
     log('info', "API call successful");
   } catch (error) {
@@ -861,8 +871,11 @@ export default function (pi: ExtensionAPI) {
 
             log('info', "File updated successfully");
             return {
-              content: [{ type: "text", text: execResult.stdout.trim() }],
-              details: {}
+              content: [{
+                type: "text",
+                text: JSON.stringify({ success: true, updated_code: updatedCode }, null, 2),
+              }],
+              details: { success: true, updated_code: updatedCode },
             };
           });
         } finally {

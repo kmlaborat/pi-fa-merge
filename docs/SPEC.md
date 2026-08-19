@@ -4,7 +4,7 @@
 
 Provide a pi.dev-compliant package (Tool/Skill) that transforms source code based on natural language instructions using fast-apply models at high speed and low cost, and **writes the transformed code directly to a target file using hash-verified scope matching**. Because the agent describes the change instead of regenerating the code itself, token consumption and response latency are reduced.
 
-This package communicates with **custom OpenAI-compatible endpoints** serving `fast-apply` models that conform to the [**kortix-ai/fast-apply**](https://github.com/kortix-ai/fast-apply) specification. It uses the tag-based prompt format (`<original-code>`, `<update-snippet>`, `<updated-code>`) defined by the specification and can connect to any OpenAI-compatible API server hosting compatible models.
+This package communicates with **custom OpenAI-compatible endpoints** serving `fast-apply` models that conform to the [**kortix-ai/fast-apply**](https://github.com/kortix-ai/fast-apply) specification. It uses the tag-based prompt format (`<code>`, `<update>`, `<updated-code>`) defined by the specification — sent as system + user messages exactly as the fast-apply models were fine-tuned on — and can connect to any OpenAI-compatible API server hosting compatible models.
 
 ### 2. Inputs & Environment
 
@@ -206,7 +206,7 @@ class User:
 
 Tasks decomposed while strictly adhering to the standard-library-only constraint.
 
-* **[Task 1: Prompt Builder]** Create and test a string processing function that strictly assembles the input `source` and `instruction` into the fast-apply prompt using the `<original-code>` and `<update-snippet>` tags. External template engines are prohibited.
+* **[Task 1: Prompt Builder]** Create and test a string processing function that strictly assembles the input `source` and `instruction` into the fast-apply inference prompt (system + user messages) using the `<code>` and `<update>` tags. External template engines are prohibited.
 * **[Task 2: OpenAI-Compatible Client]** Implement a generic request client for OpenAI-compatible endpoints using the built-in **`fetch`**. Include fixed injection of `temperature: 0` and implement **custom exponential backoff retry logic (up to 3 times) using `setTimeout`** for 429/5xx errors, along with mock tests.
 * **[Task 3: Output Parser]** Implement and test logic to safely extract and trim content from `<updated-code>...</updated-code>` in model output using standard string methods (`indexOf`, `substring`) or regular expressions, without external parsing libraries (Zod or third-party XML parsers).
 * **[Task 4: pi.dev Skill Wrapper]** Integrate Tasks 1–3 and define an entry point conforming to the pi.dev package manifest. Include safe key retrieval from environment variables via `process.env`.
