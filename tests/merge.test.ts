@@ -5,12 +5,17 @@
 
 import { describe, test, expect, beforeAll, afterAll } from 'vitest';
 import { resolve } from 'path';
+import * as fs from 'fs';
 import {
   buildPrompt,
   parseOutput,
   validateStructure,
   isRetryable,
   resolveFilePath,
+  buildApplyArgs,
+  writePayloadTempFile,
+  removeTempFile,
+  MAX_ARGV_PAYLOAD_CHARS,
 } from '../extensions/index';
 import {
   setupTestFixtures,
@@ -282,6 +287,131 @@ def f():
       expect(resolveFilePath('C:\\some\\file.rs', process.cwd())).toBe(
         'C:\\some\\file.rs',
       );
+    });
+  });
+
+  describe('buildApplyArgs', () => {
+    const file = '/tmp/target.py';
+
+    test('short payloads use argv flags', () => {
+      const args = buildApplyArgs(file, 'def f():', 'def f():\n    pass');
+      expect(args).toEqual([
+        'apply',
+        '--file',
+        file,
+        '--anchor',
+        'def f():',
+        '--replacement',
+        'def f():\n    pass',
+      ]);
+    });
+
+    test('long replacement uses --replacement-file', () => {
+      const replacement = 'x'.repeat(MAX_ARGV_PAYLOAD_CHARS + 1);
+      const args = buildApplyArgs(file, 'def f():', replacement, {
+        replacementFile: '/tmp/rep.tmp',
+      });
+      expect(args).toEqual([
+        'apply',
+        '--file',
+        file,
+        '--anchor',
+        'def f():',
+        '--replacement-file',
+        '/tmp/rep.tmp',
+      ]);
+    });
+
+    test('long anchor uses --anchor-file', () => {
+      const anchor = 'a'.repeat(MAX_ARGV_PAYLOAD_CHARS + 1);
+      const args = buildApplyArgs(file, anchor, 'new code', {
+        anchorFile: '/tmp/anchor.tmp',
+      });
+      expect(args).toEqual([
+        'apply',
+        '--file',
+        file,
+        '--anchor-file',
+        '/tmp/anchor.tmp',
+        '--replacement',
+        'new code',
+      ]);
+    });
+
+    test('handles one short and one long payload', () => {
+      const anchor = 'a'.repeat(MAX_ARGV_PAYLOAD_CHARS + 1);
+      const replacement = 'r'.repeat(MAX_ARGV_PAYLOAD_CHARS + 1);
+      const args = buildApplyArgs(file, anchor, replacement, {
+        anchorFile: '/tmp/a.tmp',
+        replacementFile: '/tmp/r.tmp',
+      });
+      expect(args).toEqual([
+        'apply',
+        '--file',
+        file,
+        '--anchor-file',
+        '/tmp/a.tmp',
+        '--replacement-file',
+        '/tmp/r.tmp',
+      ]);
+    });
+
+    test('payload of exactly the threshold stays in argv', () => {
+      const replacement = 'x'.repeat(MAX_ARGV_PAYLOAD_CHARS);
+      const args = buildApplyArgs(file, 'def f():', replacement);
+      expect(args).toContain('--replacement');
+    });
+
+    test('throws when a long payload has no file', () => {
+      const replacement = 'x'.repeat(MAX_ARGV_PAYLOAD_CHARS + 1);
+      expect(() => buildApplyArgs(file, 'def f():', replacement)).toThrow(
+        /replacementFile/,
+      );
+      const anchor = 'a'.repeat(MAX_ARGV_PAYLOAD_CHARS + 1);
+      expect(() => buildApplyArgs(file, anchor, 'new code')).toThrow(
+        /anchorFile/,
+      );
+    });
+  });
+
+  describe('payload temp files', () => {
+    test('round-trips content verbatim (multibyte, no trailing newline)', async () => {
+      const payload = 'def f():\n    return "日本"\n';
+      const filePath = await writePayloadTempFile(payload);
+      try {
+        expect(fs.existsSync(filePath)).toBe(true);
+        expect(fs.readFileSync(filePath, 'utf-8')).toBe(payload);
+      } finally {
+        await removeTempFile(filePath);
+      }
+      expect(fs.existsSync(filePath)).toBe(false);
+    });
+
+    test('does not add a trailing newline', async () => {
+      const filePath = await writePayloadTempFile('no-newline');
+      try {
+        const raw = fs.readFileSync(filePath, 'utf-8');
+        expect(raw).toBe('no-newline');
+        expect(raw.endsWith('\n')).toBe(false);
+      } finally {
+        await removeTempFile(filePath);
+      }
+    });
+
+    test('generates unique file names', async () => {
+      const p1 = await writePayloadTempFile('a');
+      const p2 = await writePayloadTempFile('b');
+      try {
+        expect(p1).not.toBe(p2);
+      } finally {
+        await Promise.all([removeTempFile(p1), removeTempFile(p2)]);
+      }
+    });
+
+    test('removeTempFile ignores missing files', async () => {
+      await expect(
+        removeTempFile('/tmp/fa-merge-does-not-exist.tmp'),
+      ).resolves.toBeUndefined();
     });
   });
 });

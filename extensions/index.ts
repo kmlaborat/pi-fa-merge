@@ -16,6 +16,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import * as fs from "fs";
+import * as os from "os";
+import * as crypto from "crypto";
 import * as path from "path";
 
 // ============================================================================
@@ -135,6 +137,79 @@ function getRequestTimeoutMs(): number {
 
 function getAnchorEditBin(): string {
   return process.env.ANCHOREDIT_BIN ?? "anchoredit";
+}
+
+// ============================================================================
+// Large Payload Handling (Windows command-line limit)
+//
+// Windows limits command lines to ~8191 characters. Anchor and replacement
+// payloads can exceed that (up to MAX_LINES of transformed code), so large
+// payloads are written to temporary files and passed via --anchor-file /
+// --replacement-file instead of command-line arguments.
+// ============================================================================
+
+export const MAX_ARGV_PAYLOAD_CHARS = 1000;
+
+export interface BuildApplyArgsOptions {
+  anchorFile?: string;
+  replacementFile?: string;
+}
+
+/**
+ * Builds the `anchoredit apply` argument list. Payloads longer than
+ * MAX_ARGV_PAYLOAD_CHARS are referenced via *-file arguments; the caller
+ * must have written the corresponding temp file and pass its path.
+ */
+export function buildApplyArgs(
+  file: string,
+  anchor: string,
+  replacement: string,
+  opts?: BuildApplyArgsOptions
+): string[] {
+  const args = ["apply", "--file", file];
+
+  if (anchor.length > MAX_ARGV_PAYLOAD_CHARS) {
+    if (!opts?.anchorFile) {
+      throw new Error("anchorFile is required for large anchor payloads");
+    }
+    args.push("--anchor-file", opts.anchorFile);
+  } else {
+    args.push("--anchor", anchor);
+  }
+
+  if (replacement.length > MAX_ARGV_PAYLOAD_CHARS) {
+    if (!opts?.replacementFile) {
+      throw new Error(
+        "replacementFile is required for large replacement payloads"
+      );
+    }
+    args.push("--replacement-file", opts.replacementFile);
+  } else {
+    args.push("--replacement", replacement);
+  }
+
+  return args;
+}
+
+/**
+ * Writes a payload to a unique temp file in os.tmpdir() and returns its path.
+ * The content is written verbatim (no trailing newline is added).
+ * The caller is responsible for deleting the file when done.
+ */
+export async function writePayloadTempFile(payload: string): Promise<string> {
+  const fileName = `fa-merge-${crypto.randomBytes(8).toString("hex")}.tmp`;
+  const filePath = path.join(os.tmpdir(), fileName);
+  await fs.promises.writeFile(filePath, payload, "utf-8");
+  return filePath;
+}
+
+/**
+ * Deletes a temp file, ignoring errors (e.g. already deleted).
+ */
+export async function removeTempFile(filePath: string): Promise<void> {
+  await fs.promises.unlink(filePath).catch(() => {
+    /* ignore */
+  });
 }
 
 // ============================================================================
@@ -702,17 +777,35 @@ export default function (pi: ExtensionAPI) {
 
         // Apply edit using AnchorEdit with file mutation queue
         log('info', "Applying changes to file with AnchorEdit");
-        return await withFileMutationQueue(resolvedFilePath, async () => {
-          const execResult = await pi.exec(
-            bin,
-            [
-              "apply",
-              "--file", resolvedFilePath,
-              "--anchor", anchor,
-              "--replacement", mergeResult.updated_code
-            ],
-            { signal: _signal },
+        const updatedCode = mergeResult.updated_code ?? "";
+        const tempFiles: string[] = [];
+        try {
+          // Large payloads go via temp files (Windows command-line limit)
+          const anchorFile =
+            anchor.length > MAX_ARGV_PAYLOAD_CHARS
+              ? await writePayloadTempFile(anchor)
+              : undefined;
+          if (anchorFile) tempFiles.push(anchorFile);
+
+          const replacementFile =
+            updatedCode.length > MAX_ARGV_PAYLOAD_CHARS
+              ? await writePayloadTempFile(updatedCode)
+              : undefined;
+          if (replacementFile) tempFiles.push(replacementFile);
+
+          const execArgs = buildApplyArgs(
+            resolvedFilePath,
+            anchor,
+            updatedCode,
+            { anchorFile, replacementFile },
           );
+
+          return await withFileMutationQueue(resolvedFilePath, async () => {
+            const execResult = await pi.exec(
+              bin,
+              execArgs,
+              { signal: _signal },
+            );
 
           if (execResult.code !== 0) {
             const output = execResult.stderr || execResult.stdout || "";
@@ -765,12 +858,16 @@ export default function (pi: ExtensionAPI) {
             };
           }
 
-          log('info', "File updated successfully");
-          return {
-            content: [{ type: "text", text: execResult.stdout.trim() }],
-            details: {}
-          };
-        });
+            log('info', "File updated successfully");
+            return {
+              content: [{ type: "text", text: execResult.stdout.trim() }],
+              details: {}
+            };
+          });
+        } finally {
+          // Always clean up temp files (success, failure, or abort)
+          await Promise.all(tempFiles.map((f) => removeTempFile(f)));
+        }
       } catch (error) {
         log('error', "Tool execution failed", error);
         const errorResult: MergeResult = {
