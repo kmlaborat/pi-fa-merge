@@ -30,6 +30,7 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 
 `extensions/core.ts` の `callOpenAiCompatibleApi` は任意の `extraBody` と `CallOptions { stream }`(SSE ストリーミング、slow モデルの 300s 遮断回避)を受け取る。
 | `docs/SPEC.md` | 契約(パラメータ・エラー種別・受け入れテスト)。実装と同期済み |
+| `docs/experiment-summary.md` | **全実験の総括**(A〜E4 の比較表、10 の結論、到達した 2 戦略設計、残タスク、再現メモ) |
 | `skills/pi-fa-merge/SKILL.md` | エージェント向けスキル |
 
 ## 確定した設計判断(勝手に変えないこと)
