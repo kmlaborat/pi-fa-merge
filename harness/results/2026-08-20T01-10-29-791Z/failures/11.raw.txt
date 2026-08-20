@@ -1,0 +1,14 @@
+"__TURBOPACK__ecmascript__hoisting__location__";
+;
+;
+;
+;
+const conditionalRequire = __turbopack_require__("[project]/turbopack/crates/turbopack-tests/tests/snapshot/imports/subpath-imports/input/require.cjs [test] (ecmascript)");
+const result = {
+  foo: __TURBOPACK__imported__module__$5b$project$5d2f$turbopack$2f$crates$2f$turbopack$2d$tests$2f$tests$2f$snapshot$2f$imports$2f$subpath$2d$imports$2f$input$2f$foo$2e$js__$5b$test$5d$__$28$ecmascript$29$__["default"],
+  dep: __TURBOPACK__imported__module__$5b$project$5d2f$turbopack$2f$crates$2f$turbopack$2d$tests$2f$tests$2f$snapshot$2f$imports$2f$subpath$2d$imports$2f$input$2f$dep$2f$index$2e$js__$5b$test$5d$__$28$ecmascript$29$__["default"],
+  pat: __TURBOPACK__imported__module__$5b$project$5d2f$turbopack$2f$crates$2f$turbopack$2d$tests$2f$tests$2f$snapshot$2f$imports$2f$subpath$2d$imports$2f$input$2f$pat$2e$js__$5b$test$5d$__$28$ecmascript$29$__["default"],
+  import: __TURBOPACK__imported__module__$5b$project$5d2f$turbopack$2f$crates$2f$turbopack$2d$tests$2f$tests$2f$snapshot$2f$imports$2f$subpath$2d$imports$2f$input$2f$import$2e$mjs__$5b$test$5d$__$28$ecmascript$29$__["default"],
+  require: conditionalRequire
+};
+console.log(JSON.stringify(result, null, 2));

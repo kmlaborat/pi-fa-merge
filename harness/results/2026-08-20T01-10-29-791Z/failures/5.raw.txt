@@ -1,0 +1,305 @@
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Display,
+};
+
+use indexmap::{IndexMap, IndexSet};
+use once_cell::sync::Lazy;
+use swc_core::{
+    common::{comments::Comments, source_map::SmallPos, BytePos, Span, Spanned},
+    ecma::{
+        ast::*,
+        atoms::{js_word, JsWord},
+        visit::{Visit, VisitWith},
+    },
+};
+use turbo_tasks::{RcStr, Vc};
+use turbopack_core::{issue::IssueSource, source::Source};
+
+use super::{top_level_await::has_top_level_await, JsValue, ModuleValue};
+use crate::{
+    tree_shake::{find_turbopack_part_id_in_asserts, PartId},
+    SpecifiedModuleType,
+};
+
+#[turbo_tasks::value(serialization = "auto_for_input")]
+#[derive(Default, Debug, Clone, Hash)]
+pub struct ImportAnnotations {
+    // TODO store this in more structured way
+    #[turbo_tasks(trace_ignore)]
+    map: BTreeMap<JsWord, JsWord>,
+}
+
+/// Enables a specified transition for the annotated import
+static ANNOTATION_TRANSITION: Lazy<JsWord> =
+    Lazy::new(|| crate::annotations::ANNOTATION_TRANSITION.into());
+
+/// Changes the chunking type for the annotated import
+static ANNOTATION_CHUNKING_TYPE: Lazy<JsWord> =
+    Lazy::new(|| crate::annotations::ANNOTATION_CHUNKING_TYPE.into());
+
+/// Changes the type of the resolved module (only "json" is supported currently)
+static ATTRIBUTE_MODULE_TYPE: Lazy<JsWord> = Lazy::new(|| "type".into());
+
+impl ImportAnnotations {
+    pub fn parse(with: Option<&ObjectLit>) -> ImportAnnotations {
+        let Some(with) = with else {
+            return ImportAnnotations::default();
+        };
+
+        let mut map = BTreeMap::new();
+
+        // The `with` clause is way more restrictive than `ObjectLit`, it only allows
+        // string -> value and value can only be a string.
+        // We just ignore everything else here till the SWC ast is more restrictive.
+        for (key, value) in with.props.iter().filter_map(|prop| {
+            let kv = prop.as_prop()?.as_key_value()?;
+
+            let Lit::Str(str) = kv.value.as_lit()? else {
+                return None;
+            };
+
+            Some((&kv.key, str))
+        }) {
+            let key = match key {
+                PropName::Ident(ident) => ident.sym.as_str(),
+                PropName::Str(str) => str.value.as_str(),
+                // the rest are invalid, ignore for now till SWC ast is correct
+                _ => continue,
+            };
+
+            map.insert(key.into(), value.value.as_str().into());
+        }
+
+        ImportAnnotations { map }
+    }
+
+    /// Returns the content on the transition annotation
+    pub fn transition(&self) -> Option<&str> {
+        self.get(&ANNOTATION_TRANSITION)
+    }
+
+    /// Returns the content on the chunking-type annotation
+    pub fn chunking_type(&self) -> Option<&str> {
+        self.get(&ANNOTATION_CHUNKING_TYPE)
+    }
+
+    /// Returns the content on the type attribute
+    pub fn module_type(&self) -> Option<&str> {
+        self.get(&ATTRIBUTE_MODULE_TYPE)
+    }
+
+    pub fn get(&self, key: &JsWord) -> Option<&str> {
+        self.map.get(key).map(|w| w.as_str())
+    }
+}
+
+impl Display for ImportAnnotations {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut it = self.map.iter();
+        if let Some((k, v)) = it.next() {
+            write!(f, "{{ {k}: {v}")?
+        } else {
+            return f.write_str("{}");
+        };
+        for (k, v) in it {
+            write!(f, ", {k}: {v}")?
+        }
+        f.write_str(" }")
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum Reexport {
+    Star,
+    Namespace { exported: JsWord },
+    Named { imported: JsWord, exported: JsWord },
+}
+
+/// The storage for all kinds of imports.
+///
+/// Note that when it's initialized by calling `analyze`, it only contains ESM
+/// import/exports.
+#[derive(Default, Debug)]
+pub(crate) struct ImportMap {
+    /// Map from identifier to (index in references, exported symbol)
+    imports: IndexMap<Id, (usize, JsWord)>,
+
+    /// Map from identifier to index in references
+    namespace_imports: IndexMap<Id, usize>,
+
+    /// List of (index in references, imported symbol, exported symbol)
+    reexports: Vec<(usize, Reexport)>,
+
+    /// Ordered list of imported symbols
+    references: IndexSet<ImportMapReference>,
+
+    /// True, when the module has imports
+    has_imports: bool,
+
+    /// True, when the module has exports
+    has_exports: bool,
+
+    /// True if the module is an ESM module due to top-level await.
+    has_top_level_await: bool,
+
+    /// Locations of [webpack-style "magic comments"][magic] that override import behaviors.
+    ///
+    /// Most commonly, these are `/* webpackIgnore: true */` comments. See [ImportOverrides] for
+    /// full details.
+    ///
+    /// [magic]: https://webpack.js.org/api/module-methods/#magic-comments
+    overrides: HashMap<BytePos, ImportOverrides>,
+}
+
+/// Represents a collection of [webpack-style "magic comments"][magic] that override import
+/// behaviors.
+///
+/// [magic]: https://webpack.js.org/api/module-methods/#magic-comments
+#[derive(Debug)]
+pub(crate) struct ImportOverrides {
+    /// Should we ignore this import expression when bundling? If so, the import expression will be
+    /// left as-is in Turbopack's output.
+    ///
+    /// This is set by using either a `webpackIgnore` or `turbopackIgnore` comment.
+    ///
+    /// Example:
+    /// ```js
+    /// const a = import(/* webpackIgnore: true */ "a");
+    /// const b = import(/* turbopackIgnore: true */ "b");
+    /// ```
+    pub ignore: bool,
+}
+
+impl ImportOverrides {
+    pub const fn empty() -> Self {
+        ImportOverrides { ignore: false }
+    }
+
+    pub fn empty_ref() -> &'static Self {
+        // use `Self::empty` here as `Default::default` isn't const
+        static DEFAULT_VALUE: ImportOverrides = ImportOverrides::empty();
+        &DEFAULT_VALUE
+    }
+}
+
+impl Default for ImportOverrides {
+    fn default() -> Self {
+        ImportOverrides::empty()
+    }
+}
+
+impl Default for &ImportOverrides {
+    fn default() -> Self {
+        ImportOverrides::empty_ref()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum ImportedSymbol {
+    ModuleEvaluation,
+    Symbol(JsWord),
+    Exports,
+    Part(u32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct ImportMapReference {
+    pub module_path: JsWord,
+    pub imported_symbol: ImportedSymbol,
+    pub annotations: ImportAnnotations,
+    pub issue_source: Option<Vc<IssueSource>>,
+}
+
+impl ImportMap {
+    pub fn is_esm(&self, specified_type: SpecifiedModuleType) -> bool {
+        match specified_type {
+            SpecifiedModuleType::Automatic => {
+                self.has_exports || self.has_imports || self.has_top_level_await
+            }
+            SpecifiedModuleType::CommonJs => false,
+            SpecifiedModuleType::EcmaScript => true,
+        }
+    }
+
+    pub fn get_import(&self, id: &Id) -> Option<JsValue> {
+        if let Some((i, i_sym)) = self.imports.get(id) {
+            let r = &self.references[*i];
+            return Some(JsValue::member(
+                Box::new(JsValue::Module(ModuleValue {
+                    module: r.module_path.clone(),
+                    annotations: r.annotations.clone(),
+                })),
+                Box::new(i_sym.clone().into()),
+            ));
+        }
+        if let Some(i) = self.namespace_imports.get(id) {
+            let r = &self.references[*i];
+            return Some(JsValue::Module(ModuleValue {
+                module: r.module_path.clone(),
+                annotations: r.annotations.clone(),
+            }));
+        }
+        None
+    }
+
+    pub fn get_overrides(&self, span: Span) -> &ImportOverrides {
+        self.overrides.get(&span.lo).unwrap_or_default()
+    }
+
+    // TODO this could return &str instead of String to avoid cloning
+    pub fn get_binding(&self, id: &Id) -> Option<(usize, Option<RcStr>)> {
+        if let Some((i, i_sym)) = self.imports.get(id) {
+            return Some((*i, Some(i_sym.as_str().into())));
+        }
+        if let Some(i) = self.namespace_imports.get(id) {
+            return Some((*i, None));
+        }
+        None
+    }
+
+    pub fn references(&self) -> impl Iterator<Item = &ImportMapReference> {
+        self.references.iter()
+    }
+
+    pub fn reexports(&self) -> impl Iterator<Item = (usize, &Reexport)> {
+        self.reexports.iter().map(|(i, r)| (*i, r))
+    }
+
+    pub fn get_import_count(&self) -> usize {
+        self.imports.len() + self.namespace_imports.len()
+    }
+
+    pub fn get_reexport_count(&self) -> usize {
+        self.reexports.len()
+    }
+
+    /// Analyze ES import
+    pub(super) fn analyze(
+        m: &Program,
+        source: Option<Vc<Box<dyn Source>>>,
+        comments: Option<&dyn Comments>,
+    ) -> Self {
+        let mut data = ImportMap::default();
+
+        m.visit_with(&mut Analyzer {
+            data: &mut data,
+            source,
+            comments,
+        });
+
+        data
+    }
+}
+
+impl ImportMapReference {
+    pub fn get_module_path(&self) -> &JsWord {
+        &self.module_path
+    }
+}
+
+struct Analyzer<'a> {
+    data: &'a mut ImportMap,
+    source: Option<Vc<Box<dyn Source>>>,
+    comments: Option<&'a dyn Comments>,
+}

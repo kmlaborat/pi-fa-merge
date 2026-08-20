@@ -26,9 +26,21 @@
  *   harness/results/<run-id>/summary.md      — aggregate metrics
  *   harness/results/<run-id>/failures/<id>.raw.txt — raw model output on failure
  *
+ * Modes (--mode):
+ *   full-code   <code> = full file, <update> = code snippet (default; baseline A)
+ *   block-code  <code> = minimal block (header + hunks ±5), <update> = rescoped snippet (B)
+ *   block-nl    <code> = minimal block, <update> = natural-language instruction (C;
+ *               instructions from harness/instructions.json: {case_id: text})
+ *   full-nl     <code> = full file, <update> = natural-language instruction (D)
+ *
+ * Block modes report two metric levels: block-level (model output vs the
+ * expected block) and file-level (the block spliced back into the original
+ * file vs the ground-truth full file — the metric that matters for the
+ * agent-loop vision).
+ *
  * Usage:
- *   npx tsx harness/run.mts                 # run all cases in cases.json
- *   npx tsx harness/run.mts --case 0 --case 3   # run specific cases only
+ *   npx tsx harness/run.mts --mode block-code           # all cases, mode B
+ *   npx tsx harness/run.mts --case 0 --case 3           # specific cases
  *
  * Env:
  *   FA_MERGE_ENV_FILE — path to the .env to load (default: the installed
@@ -55,6 +67,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 // ---------------------------------------------------------------------------
 
 const CASES_FILE = join(here, "cases.json");
+const CASES_BLOCK_FILE = join(here, "cases-block.json");
+const INSTRUCTIONS_FILE = join(here, "instructions.json");
 const DEFAULT_ENV_FILE =
   process.env.FA_MERGE_ENV_FILE ??
   "C:\\Users\\Game\\MyDevEnv\\.home\\.pi\\agent\\git\\github.com\\kmlaborat\\pi-fa-merge\\.env";
@@ -83,6 +97,7 @@ if (!API_KEY) {
 }
 
 // Case selection + options
+let MODE = "full-code";
 const onlyCases = new Set();
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
@@ -92,9 +107,29 @@ for (let i = 0; i < argv.length; i++) {
     // timeout than the installed .env specifies for slow local models).
     process.env.FAST_APPLY_TIMEOUT = argv[++i];
   }
+  if (argv[i] === "--mode") MODE = argv[++i];
 }
-const allCases = JSON.parse(readFileSync(CASES_FILE, "utf-8"));
+if (!["full-code", "block-code", "block-nl", "full-nl"].includes(MODE)) {
+  console.error(`ERROR: unknown --mode ${MODE} (expected full-code | block-code | block-nl | full-nl)`);
+  process.exit(1);
+}
+
+const needsInstructions = MODE === "block-nl" || MODE === "full-nl";
+let instructions: Record<number, string> = {};
+if (needsInstructions) {
+  instructions = JSON.parse(readFileSync(INSTRUCTIONS_FILE, "utf-8"));
+}
+const allCases = JSON.parse(readFileSync(MODE.includes("block") ? CASES_BLOCK_FILE : CASES_FILE, "utf-8"));
 const cases = onlyCases.size > 0 ? allCases.filter((c) => onlyCases.has(c.case_id)) : allCases;
+if (needsInstructions) {
+  for (const c of cases) {
+    if (!instructions[c.case_id]) {
+      console.error(`ERROR: no natural-language instruction for case ${c.case_id} in ${INSTRUCTIONS_FILE}`);
+      process.exit(1);
+    }
+  }
+}
+console.log(`Mode: ${MODE}`);
 console.log(`Cases to run: ${cases.length}\n`);
 
 // ---------------------------------------------------------------------------
@@ -107,6 +142,12 @@ function normalizeWs(code) {
   while (lines.length > 0 && lines[0] === "") lines.shift();
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   return lines.join("\n");
+}
+
+/** Replace line range [start, end] (inclusive, 0-based) of `full` with `replacement`. */
+function spliceRange(full: string, start: number, end: number, replacement: string): string {
+  const lines = full.replace(/\r\n/g, "\n").split("\n");
+  return lines.slice(0, start).concat(replacement.split("\n")).concat(lines.slice(end + 1)).join("\n");
 }
 
 /** Dice similarity over LCS of lines: 2*LCS/(n+m). Null if n*m is too large. */
@@ -167,33 +208,44 @@ const results = [];
 let totalLatency = 0;
 
 for (const c of cases) {
+  // Per-mode inputs and expectations. In full-code mode the "block" is the
+  // whole file, so block-level and file-level metrics coincide.
+  const isFull = !MODE.includes("block");
+  const originalCode = isFull ? c.original_code : c.block_original;
+  const updateSnippet = isFull
+    ? MODE === "full-nl" ? instructions[c.case_id] : c.update_snippet
+    : MODE === "block-code" ? c.block_update : instructions[c.case_id];
+  const expectedBlock = isFull ? c.final_code : c.block_final;
+
   const t0 = Date.now();
   const record = {
+    mode: MODE,
     case_id: c.case_id,
     stratum: c.stratum,
     file_name: c.file_name,
-    token_count: c.token_count,
-    line_count: c.line_count,
-    est_input_tokens: Math.floor((c.original_code.length + c.update_snippet.length) / 4),
+    block_lines: c.block_lines ?? c.line_count,
+    est_input_tokens: Math.floor((originalCode.length + updateSnippet.length) / 4),
     latency_ms: 0,
     api_attempts: null,
     api_error: null,
     parse_error: null,
     parse_success: false,
-    exact_match: false,
-    ws_match: false,
-    line_sim: null,
+    exact_block: false,
+    ws_block: false,
+    sim_block: null,
+    exact_file: false,
+    ws_file: false,
     est_output_tokens: null,
   };
 
   try {
-    const messages = buildPrompt(c.original_code, c.update_snippet);
+    const messages = buildPrompt(originalCode, updateSnippet);
     const { content, attempts } = await callWithRetry(messages);
     record.api_attempts = attempts;
     record.latency_ms = Date.now() - t0;
     totalLatency += record.latency_ms;
 
-    const parsed = parseOutput(content, c.original_code);
+    const parsed = parseOutput(content, originalCode);
     if (!parsed.success) {
       record.parse_error = parsed.error;
       record.parse_details = parsed.details;
@@ -201,11 +253,19 @@ for (const c of cases) {
     } else {
       record.parse_success = true;
       record.est_output_tokens = Math.floor(parsed.updated_code.length / 4);
-      record.exact_match = parsed.updated_code === c.final_code;
-      record.ws_match = normalizeWs(parsed.updated_code) === normalizeWs(c.final_code);
-      record.line_sim =
-        record.exact_match ? 1 : lineSimilarity(parsed.updated_code, c.final_code);
-      if (!record.ws_match) {
+      // Block-level metrics: model output vs expected block.
+      record.exact_block = parsed.updated_code === expectedBlock;
+      record.ws_block = normalizeWs(parsed.updated_code) === normalizeWs(expectedBlock);
+      record.sim_block =
+        record.exact_block ? 1 : lineSimilarity(parsed.updated_code, expectedBlock);
+      // File-level metrics: splice the model's block back into the original
+      // file and compare with the ground-truth full file.
+      const fullOut = isFull
+        ? parsed.updated_code
+        : spliceRange(c.original_code, c.orig_start, c.orig_end, parsed.updated_code);
+      record.exact_file = fullOut === c.final_code;
+      record.ws_file = normalizeWs(fullOut) === normalizeWs(c.final_code);
+      if (!record.ws_block) {
         writeFileSync(join(failDir, `${c.case_id}.raw.txt`), parsed.updated_code, "utf-8");
       }
     }
@@ -221,14 +281,14 @@ for (const c of cases) {
     ? `API_FAIL(${record.api_error})`
     : record.parse_error
       ? `PARSE_FAIL(${record.parse_error})`
-      : record.exact_match
+      : record.exact_file
         ? "EXACT"
-        : record.ws_match
-          ? "WS_MATCH"
-          : `DIFF(sim=${record.line_sim?.toFixed(3)})`;
+        : record.ws_file
+          ? "WS_FILE"
+          : `DIFF(sim=${record.sim_block?.toFixed(3)}${isFull ? "" : ",file=" + (record.ws_file ? "ws" : "diff")})`;
   console.log(
     `case ${String(c.case_id).padStart(2)} [${c.stratum}] ${status} ` +
-      `${record.latency_ms}ms in~${record.est_input_tokens}tok`
+      `${record.latency_ms}ms in~${record.est_input_tokens}tok (block ${record.block_lines}L)`
   );
 }
 
@@ -239,10 +299,11 @@ for (const c of cases) {
 const n = results.length;
 const apiOk = results.filter((r) => !r.api_error);
 const parsed = results.filter((r) => r.parse_success);
-const exact = results.filter((r) => r.exact_match);
-const ws = results.filter((r) => r.ws_match);
+const exact = results.filter((r) => r.exact_file);
+const ws = results.filter((r) => r.ws_file);
+const exactBlock = results.filter((r) => r.exact_block);
 const sims = results
-  .map((r) => r.line_sim)
+  .map((r) => r.sim_block)
   .filter((s) => s !== null && s !== undefined);
 const avgSim = sims.length > 0 ? sims.reduce((a, b) => a + b, 0) / sims.length : null;
 const parseErrors = {};
@@ -265,6 +326,7 @@ const summary = [
   `- Endpoint: \`${ENDPOINT}\`` ,
   `- Model: \`${MODEL}\``,
   `- Dataset: Kortix/FastApply-dataset-v1.0 (test split, stratified sample)`,
+  `- Mode: ${MODE}`,
   `- Cases: ${n}`,
   "",
   "## 指標",
@@ -273,8 +335,9 @@ const summary = [
   "|---|---|",
   `| API 到達成功率 | ${apiOk.length}/${n} (${(100 * apiOk.length / n).toFixed(1)}%) |`,
   `| parseOutput/構造検証 通過率 | ${parsed.length}/${n} (${(100 * parsed.length / n).toFixed(1)}%) |`,
-  `| 完全一致率 | ${exact.length}/${n} (${(100 * exact.length / n).toFixed(1)}%) |`,
-  `| 完全一致率(whitespace 無視) | ${ws.length}/${n} (${(100 * ws.length / n).toFixed(1)}%) |`,
+  `| 完全一致率(ファイル級) | ${exact.length}/${n} (${(100 * exact.length / n).toFixed(1)}%) |`,
+  `| 完全一致率(whitespace 無視、ファイル級) | ${ws.length}/${n} (${(100 * ws.length / n).toFixed(1)}%) |`,
+  ...(MODE.includes("block") ? [`| 完全一致率(ブロック級) | ${exactBlock.length}/${n} (${(100 * exactBlock.length / n).toFixed(1)}%) |`] : []),
   `| 行単位の類似度平均 (Dice/LCS, 一致時 1.0) | ${avgSim === null ? "n/a" : avgSim.toFixed(4)} |`,
   `| 中央値レイテンシ | ${medianLatency} ms |`,
   `| 総レイテンシ | ${totalLatency} ms |`,
@@ -288,19 +351,22 @@ const summary = [
   "",
   "## ケース別",
   "",
-  "| case | stratum | 結果 | 類似度 | latency | in~tok |",
-  "|---|---|---|---|---|---|",
+  "| case | stratum | 結果(ファイル級) | ブロック一致 | 類似度 | latency | in~tok |",
+  "|---|---|---|---|---|---|---|",
   ...results.map((r) => {
     const status = r.api_error
       ? `API_FAIL(${r.api_error})`
       : r.parse_error
         ? `PARSE_FAIL(${r.parse_error})`
-        : r.exact_match
+        : r.exact_file
           ? "EXACT"
-          : r.ws_match
-            ? "WS_MATCH"
+          : r.ws_file
+            ? "WS_FILE"
             : "DIFF";
-    return `| ${r.case_id} | ${r.stratum} | ${status} | ${r.line_sim === null ? "-" : r.line_sim.toFixed(3)} | ${r.latency_ms}ms | ${r.est_input_tokens} |`;
+    const blockCol = r.parse_success
+      ? (r.exact_block ? "EXACT" : r.ws_block ? "WS" : "DIFF")
+      : "-";
+    return `| ${r.case_id} | ${r.stratum} | ${status} | ${blockCol} | ${r.sim_block === null ? "-" : r.sim_block.toFixed(3)} | ${r.latency_ms}ms | ${r.est_input_tokens} |`;
   }),
   "",
   "## 注記",

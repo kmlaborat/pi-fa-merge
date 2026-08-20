@@ -3,7 +3,7 @@
 | 項目 | 内容 |
 |------|------|
 | 更新日 | 2026-08-20 |
-| 最新コミット | ToDo 2.5(validateStructure 誤爆修正)完了コミットまで。最新は `git log -3` で確認 |
+| 最新コミット | ToDo 2(2軸 A/B 実験)完了コミットまで。最新は `git log -3` で確認 |
 | リポジトリ | `C:\Users\Game\MyDevEnv\wd\pi-fa-merge`(リモート: github.com/kmlaborat/pi-fa-merge) |
 | インストール先 | `C:\Users\Game\MyDevEnv\.home\.pi\agent\git\github.com\kmlaborat\pi-fa-merge`(`9549fe2` まで pull 済み、`.env` は存在) |
 | 前提PJ | `C:\Users\Game\MyDevEnv\wd\AnchorScope` / `AnchorEdit`(v2、`main` clean。AnchorScope はライブラリ依存。`anchoredit` バイナリ v2.0.0 はインストール済み — 修正なければ再 `cargo install` 不要) |
@@ -22,7 +22,10 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 | `tests/merge.test.ts` / `tests/env.test.ts` | 実関数の直接ユニットテスト計 59 件 |
 | `harness/fetch-cases.mjs` | HF `Kortix/FastApply-dataset-v1.0` test split から層化抽出(言語×トークン帯)→ `harness/cases.json` |
 | `harness/run.mts` | ベースラインハーネス: `buildPrompt`→API→`parseOutput` を直接駆動。`--case N` / `--timeout MS` 対応。結果は `harness/results/<run-id>/` |
-| `harness/results/baseline-2026-08-19.md` | **ベースライン報告書**(完全一致 65% / sim≥0.95 80% / validateStructure 誤爆 25% 等) |
+| `harness/results/baseline-2026-08-19.md` | **ベースライン報告書**(完全一致 65% / sim≥0.95 80% / validateStructure 誤爆 25%→修正で 0 等) |
+| `harness/block.mjs` | GT diff(LCS)からブロック+re-scoped snippet を機械抽出 → `cases-block.json`(末尾改行不整合・del 境界を処理。splicing 不変条件を全件で検証) |
+| `harness/instructions.json` | 20 件の自然言語編集指示(手書き、コード本文なし) — mode C/D 用 |
+| `harness/results/ab-experiment-2026-08-20.md` | **2軸 A/B 実験報告**(A 65% / B 45% / C 15% / D 15% EXACT、ブロックで 2 倍速・-43% tok、NL は不採用判断) |
 | `docs/SPEC.md` | 契約(パラメータ・エラー種別・受け入れテスト)。実装と同期済み |
 | `skills/pi-fa-merge/SKILL.md` | エージェント向けスキル |
 
@@ -55,7 +58,7 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 | `7978738` | CI Node 20→22(pi-coding-agent が >=22.19 を要求) |
 | `9549fe2` | `.env` ロードの pi-fc-search 整合 + `/reload-env` 追加(→ 次コミットで `reload-fa-env` に改名) |
 | `06b43eb` | `/reload-fa-env` 改名 + この文書追加 |
-| (本セッション) | ① 純粋コアを `extensions/core.ts` に抽出(pi 非依存化。index.ts は re-export で後方互換、59 テスト維持) ② 評価ハーネス `harness/` 新設 + **実測ベースライン実行**(20 件、結果 `harness/results/baseline-2026-08-19.md`) ③ e2e(anchoredit 書き込み)確認完了 ④ **validateStructure 誤爆修正**(prefix `startsWith` → 50% 存在チェック、テスト 61 件、再実行で誤爆 0/20 を確認) ⑤ README タイムアウト推奨追記 |
+| (本セッション) | ① 純粋コアを `extensions/core.ts` に抽出(pi 非依存化。index.ts は re-export で後方互換、59 テスト維持) ② 評価ハーネス `harness/` 新設 + **実測ベースライン実行**(20 件、結果 `harness/results/baseline-2026-08-19.md`) ③ e2e(anchoredit 書き込み)確認完了 ④ **validateStructure 誤爆修正**(prefix `startsWith` → 50% 存在チェック、テスト 61 件、再実行で誤爆 0/20 を確認) ⑤ README タイムアウト推奨追記 ⑥ **2軸 A/B 実験実行**(full/block × code/NL、`harness/block.mjs` 新設、結果 `harness/results/ab-experiment-2026-08-20.md`) |
 
 ## 実測ベースラインの結果サマリ(詳細: `harness/results/baseline-2026-08-19.md`)
 
@@ -83,11 +86,22 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 - **baseline 計測 → 結果を `harness/results/` に保存**
 - 副産物: 実エンドポイント + anchoredit 書き込みのエンドツーエンド初回確認
 
-### 2. 自然言語 A/B 実験
-- baseline は**確定済み**(`harness/results/baseline-2026-08-19.md`: 完全一致 65% / sim≥0.95 80%)
-- 次: 同 20 件に対し `update_snippet` を自然言語指示に置換して再計測(ハーネスに `--mode nl` 的バリアント追加)
-- 精度劣化を定量 → 「自然言語サポートを入れる/入れない/オプションにする」を判断
-- 参考: fast-apply はコードスニペットでファインチューニングされており、自然言語は**分布外**。劣化が大きいなら fast-apply 維持が合理的
+### 2. ~~スコープ × 指示 2軸 A/B 実験~~ — **完了 (2026-08-20)**
+**報告: `harness/results/ab-experiment-2026-08-20.md`**。要点:
+- **A(全文+コード) 65% EXACT / B(ブロック+コード) 45% / C(ブロック+NL) 15% / D(全文+NL) 15%**(ファイル級完全一致、同一 20 件)
+- ブロック渡し: EXACT は下がるが sim≥0.95 は 85% で不変。**レイテンシ 2 倍速、入出力トークン -43%**。失敗の中心は「挿入位置のズレ」(省略マーカー+繰り返し構造行)。
+- **自然言語指示は決定的に劣る**(全文スコープでも 15%) → fast-apply への NL は採用しない判断材料。
+- ブロック抽出(`harness/block.mjs`): GT diff から機械抽出、splicing 不変条件を全件で検証済み。データセットの末尾改行不整合(15/20)への対処含む。
+- 以下は当初の設計(記録用):
+  - **背景**: 小規模 agentic モデル(InternScience/Agents-A1-4B 級)に編集能力付与。4B が「編集する部分(ブロック)+ 変えたい内容」を生成 → fast-apply → anchoredit 書換。
+  - ブロック = import 直前までの先頭ヘッダー + 各変更 hunk ± 5 行。指標はブロック級 + splicing 後のファイル級。
+
+### 5. 4B agentic モデルとのエンドツーエンド(**環境整い、次の着手先**) ⭐
+- **Agents-A1-4B は既に serve 済み**(インストール先 `.env` の `FASTCONTEXT_ENDPOINT`/`FASTCONTEXT_API_KEY`、`FASTCONTEXT_MODEL=Agents-A1-4B`)
+- ループ: 「ファイル + 編集意図(NL)」→ 4B が fa_merge 引数(original_code ブロック + **コード形式** update snippet — NL 不可: 2 の結論)を生成 → 実 fa_merge → anchoredit 書換
+- 評価: 2 の B(ブロック+コード: 45% EXACT / 75% WS)が引数生成の品質基準。成功定義候補: ファイル級 WS 一致
+- 設計判断(2 から): ブロックには import ヘッダー + hunk ±5 行、anchor 一意性のための固有コンテキスト行を snippet 端に、anchor は agent が明示指定
+- 未着手。ハーネス側に「エージェントの引数生成を評価する」モード追加が必要(4B を引数生成器として呼ぶ)
 
 ### 2.5. ~~validateStructure の誤爆修正~~ — **完了 (2026-08-20)** ⭐
 - 実測データで閾値を設計: 誤爆 5 件の prefix 行存在率は 75〜100%、実エラー(docstring 削除)は 0% → **`startsWith` を「非空 prefix 行の 50% 以上が出力に(行トリムして)存在」に緩和**(`extensions/core.ts`)。
