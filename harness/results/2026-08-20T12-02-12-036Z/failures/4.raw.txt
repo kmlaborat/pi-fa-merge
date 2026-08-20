@@ -1,0 +1,69 @@
+<code>
+"use client";
+
+import { BrushIcon, KeyIcon, LanguagesIcon, ListChecksIcon, TagIcon, UsersIcon } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { cn } from "@formbricks/lib/cn";
+import { PageContentWrapper } from "@formbricks/ui/components/PageContentWrapper";
+import { PageHeader } from "@formbricks/ui/components/PageHeader";
+
+const LoadingCard = ({ title, description, skeletonLines, footer }) => {
+  return (
+    <div className="w-full max-w-4xl rounded-xl border border-slate-200 bg-white py-4 text-left shadow-sm">
+      <div className="grid content-center border-b border-slate-200 px-4 pb-4 text-left text-slate-900">
+        <h3 className="text-lg font-medium leading-6">{title}</h3>
+        <p className="mt-1 text-sm text-slate-500">{description}</p>
+      </div>
+      <div className="w-full">
+        <div className="rounded-lg px-4">
+          {skeletonLines.map((line, index) => (
+            <div key={index} className="mt-4">
+              <div
+                className={`flex animate-pulse flex-col items-center justify-center space-y-2 rounded-lg bg-slate-200 py-6 text-center ${line.classes}`}></div>
+            </div>
+          ))}
+        </div>
+      </div>
+      {footer && (
+        <div className="border-t border-slate-200 px-4 py-2 text-sm text-slate-500">
+          {footer}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const Loading = () => {
+  const pathname = usePathname();
+
+  const cards = [
+    {
+      title: "Widget Status",
+      description: "Check if the Formbricks widget is alive and kicking.",
+      skeletonLines: [{ classes: " h-44 max-w-full rounded-md" }],
+      footer: 'Last checked: 5 minutes ago',
+    },
+    {
+      title: "Your EnvironmentId",
+      description: "This id uniquely identifies this Formbricks environment.",
+      skeletonLines: [{ classes: "h-6 w-4/6 rounded-full" }],
+      footer: 'Environment ID is auto-generated',
+    },
+    {
+      title: "How to setup",
+      description: "Follow these steps to setup the Formbricks widget within your app",
+      skeletonLines: [
+        { classes: "h-6 w-24 rounded-full" },
+        { classes: "h-4 w-60 rounded-full" },
+        { classes: "h-4 w-60 rounded-full" },
+        { classes: "h-6 w-24 rounded-full" },
+        { classes: "h-4 w-60 rounded-full" },
+        { classes: "h-4 w-60 rounded-full" },
+      ],
+      footer: 'Setup guide updated recently',
+    },
+  ];
+
+  let navigation = [
+    {
+</code>

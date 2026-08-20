@@ -1,0 +1,20 @@
+<code>
+/** @type {import('next').NextConfig} */
+
+const nextConfig = {
+  reactStrictMode: true,
+  compiler: {
+    styledComponents: true,
+  },
+  images: {
+    domains: ['example.com'],
+  },
+  i18n: {
+    locales: ['en', 'fr', 'es'],
+    defaultLocale: 'en',
+  },
+};
+
+module.exports = nextConfig;
+
+</code>

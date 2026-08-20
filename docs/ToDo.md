@@ -26,7 +26,7 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 | `harness/block.mjs` | GT diff(LCS)からブロック+re-scoped snippet を機械抽出 → `cases-block.json`(末尾改行不整合・del 境界を処理。splicing 不変条件を全件で検証) |
 | `harness/instructions.json` | 20 件の自然言語編集指示(手書き、コード本文なし) — mode C/D 用 |
 | `harness/results/ab-experiment-2026-08-20.md` | **2軸 A/B 実験報告**(A 65% / B 45% / C 15% / D 15% EXACT、ブロックで 2 倍速・-43% tok、NL は不採用判断) |
-| `harness/results/agent-rewrite-2026-08-20.md` | **agent-rewrite 実験報告**(3 ラウンド: E0 thinking-off 15% / E1 Instruct 10% — ともに B に未達、E2 Thinking は思考 32k tok 超過で実測不能、E3 maple-2bit は 2bit 劣化で 5%。llama-swap の 300s non-streaming 遮断と streaming 対応、mlx-lm キー不要対応) |
+| `harness/results/agent-rewrite-2026-08-20.md` | **agent-rewrite 実験報告**(4 ラウンド: E0 thinking-off 15% / E1 Instruct 10% / E2 Thinking 実測不能(思考 32k tok 超過) / E3 maple-2bit 5%(2bit 劣化) / E4 FA-7B 直接 rewrite は 0%・avgSim 0.838(merge 用途の 45% と比較し用途適合の差)。llama-swap の 300s 遮断→streaming 対応、mlx-lm キー不要対応) |
 
 `extensions/core.ts` の `callOpenAiCompatibleApi` は任意の `extraBody` と `CallOptions { stream }`(SSE ストリーミング、slow モデルの 300s 遮断回避)を受け取る。
 | `docs/SPEC.md` | 契約(パラメータ・エラー種別・受け入れテスト)。実装と同期済み |
@@ -61,7 +61,7 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 | `7978738` | CI Node 20→22(pi-coding-agent が >=22.19 を要求) |
 | `9549fe2` | `.env` ロードの pi-fc-search 整合 + `/reload-env` 追加(→ 次コミットで `reload-fa-env` に改名) |
 | `06b43eb` | `/reload-fa-env` 改名 + この文書追加 |
-| (本セッション) | ① 純粋コアを `extensions/core.ts` に抽出(pi 非依存化。index.ts は re-export で後方互換、59 テスト維持) ② 評価ハーネス `harness/` 新設 + **実測ベースライン実行**(20 件、結果 `harness/results/baseline-2026-08-19.md`) ③ e2e(anchoredit 書き込み)確認完了 ④ **validateStructure 誤爆修正**(prefix `startsWith` → 50% 存在チェック、テスト 61 件、再実行で誤爆 0/20 を確認) ⑤ README タイムアウト推奨追記 ⑥ **2軸 A/B 実験実行**(full/block × code/NL、`harness/block.mjs` 新設、結果 `harness/results/ab-experiment-2026-08-20.md`) ⑦ **agent-rewrite 実験 3 ラウンド実行**(E0/E1/E2/E3: 専用テンプレートモデルで再計測、Instruct≒thinking-off を確認、Thinking は思考 32k tok 超過で実測不能、maple-2bit は 2bit 劣化で 5%、llama-swap の 300s non-streaming 遮断を発見し core.ts に SSE ストリーミング追加、`--rewrite-model`/`--max-tokens`/`--rewrite-endpoint`/`--rewrite-key` フラグ追加、結果 `harness/results/agent-rewrite-2026-08-20.md`) |
+| (本セッション) | ① 純粋コアを `extensions/core.ts` に抽出(pi 非依存化。index.ts は re-export で後方互換、59 テスト維持) ② 評価ハーネス `harness/` 新設 + **実測ベースライン実行**(20 件、結果 `harness/results/baseline-2026-08-19.md`) ③ e2e(anchoredit 書き込み)確認完了 ④ **validateStructure 誤爆修正**(prefix `startsWith` → 50% 存在チェック、テスト 61 件、再実行で誤爆 0/20 を確認) ⑤ README タイムアウト推奨追記 ⑥ **2軸 A/B 実験実行**(full/block × code/NL、`harness/block.mjs` 新設、結果 `harness/results/ab-experiment-2026-08-20.md`) ⑦ **agent-rewrite 実験 4 ラウンド実行**(E0〜E4: Instruct≒thinking-off を確認、Thinking は思考 32k tok 超過で実測不能、maple-2bit は 2bit 劣化で 5%、FA-7B の直接 rewrite は 0%/avgSim 0.838 で merge 用途(45%)との用途適合差を実証、llama-swap の 300s non-streaming 遮断を発見し core.ts に SSE ストリーミング追加、`--rewrite-model`/`--max-tokens`/`--rewrite-endpoint`/`--rewrite-key` フラグ追加、結果 `harness/results/agent-rewrite-2026-08-20.md`) |
 
 ## 実測ベースラインの結果サマリ(詳細: `harness/results/baseline-2026-08-19.md`)
 
@@ -106,6 +106,7 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
   - **E1**(`Agents-A1-4B-Instruct` 専用テンプレート、全 20): EXACT 2/20 (10%)、avgSim 0.881 → **E0 と同等**(専用テンプレートは thinking off と同等であることを確認)。**B(block+code via fast-apply: 45%/85%)に未達**の結論は不変
   - **E2**(`Agents-A1-4B-Thinking`): **実用上不可** — 最小ケース(8 行 SQL)で 32768 トークンを思考だけで使い切り content 空(約 13 分)。2+2 健全性チェックでは正常(思考 487 字・正答・ループなし)→ モデル破損ではなく思考長が実用予算を超過
   - **E3**(`maple-preview-2bit-mlx`、mlx-lm :8082、キー不要): EXACT 1/20 (5%)、avgSim 0.542 → **2bit 量子化で大幅劣化**。小ケースは動くが、大ブロックで反復デジュネレーション(`inline_globals2` 数百回ループ)+ 1 件 content 空 API_FAIL。**rewrite バックエンド非推奨**(4bit 以上で再量子化すれば再評価候補)
+  - **E4**(FastApply-7B を instruct として rewrite に使用): EXACT 0/20、avgSim 0.838、sim≥0.95 5/20 → **4B-Instruct(0.881)より下**。タグ/省略漏れ 0 件(instruct として振る舞う)だが、① 行末スペース継承で byte 不一致(case 7 はそれだけ) ② 305 行ブロックで 14 行の截断失敗。**結論: 同一モデルでも用途適合が決める — FA-7B は merge 用途(B: 45%)で最強、rewrite 用途では 4B に負ける**
   - 失敗プロファイル(E1): ① 空行/空白等のフォーマット差(機能は正しい) ② 挿入位置誤り ③ ファイル idiom 未踏襲(例: `@apply` 不使用)
   - **運用発見**: llama-swap は non-streaming 応答を ~300s で遮断(306s で `fetch failed` が再現)→ core.ts に **SSE ストリーミング**(`CallOptions { stream }`)を追加済み。rewrite モードは常時ストリーミング
   - ハーネスに `--rewrite-endpoint`/`--rewrite-key` フラグ追加(キー不要サーバ=mlx-lm 対応、`.env` 変更なしで別エンドポイント計測)

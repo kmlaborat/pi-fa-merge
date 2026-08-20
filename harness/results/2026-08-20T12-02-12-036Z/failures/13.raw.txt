@@ -1,0 +1,18 @@
+<code>
+  };
+  attendee_ability: "none";
+  free_busy_status: "busy";
+  location?: {
+    name?: string;
+  };
+  address?: string; // Added address field
+  reminders: [
+    {
+      minutes: number;
+      method?: 'email' | 'popup'; // Added method field
+    }
+  ];
+};
+
+export type CreateEventResp = {
+</code>
