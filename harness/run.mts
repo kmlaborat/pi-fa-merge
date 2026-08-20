@@ -74,9 +74,10 @@ const DEFAULT_ENV_FILE =
   "C:\\Users\\Game\\MyDevEnv\\.home\\.pi\\agent\\git\\github.com\\kmlaborat\\pi-fa-merge\\.env";
 
 // Load the installed package .env with the package's own rules.
+let ENV_CONTENT = "";
 try {
-  const content = readFileSync(DEFAULT_ENV_FILE, "utf-8");
-  const ignored = applyEnvContent(content, process.env);
+  ENV_CONTENT = readFileSync(DEFAULT_ENV_FILE, "utf-8");
+  const ignored = applyEnvContent(ENV_CONTENT, process.env);
   console.log(`Loaded .env from: ${DEFAULT_ENV_FILE}`);
   if (ignored.length > 0) console.log(`  (ignored non-prefixed keys: ${ignored.join(", ")})`);
 } catch (e) {
@@ -84,17 +85,28 @@ try {
   console.error("Falling back to existing process.env values.");
 }
 
+/** Parse keys with a given prefix (e.g. "FASTCONTEXT_") from raw .env
+ *  content. applyEnvContent only applies the FAST_APPLY / ANCHOREDIT
+ *  prefixes; the agent-rewrite experiment needs FASTCONTEXT keys too. */
+function parseEnvPrefix(content: string, prefix: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of content.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i <= 0) continue;
+    const k = t.slice(0, i).trim();
+    let v = t.slice(i + 1).trim();
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+    if (k.startsWith(prefix)) out[k] = v;
+  }
+  return out;
+}
+
 const ENDPOINT =
   process.env.FAST_APPLY_ENDPOINT_URL ?? "https://api.fireworks.ai/inference/v1";
 const MODEL = process.env.FAST_APPLY_MODEL_NAME ?? "fast-apply-7b";
 const API_KEY = process.env.FAST_APPLY_API_KEY;
-
-console.log(`Endpoint: ${ENDPOINT}`);
-console.log(`Model:    ${MODEL}`);
-if (!API_KEY) {
-  console.error("ERROR: FAST_APPLY_API_KEY not set after .env load — aborting.");
-  process.exit(1);
-}
 
 // Case selection + options
 let MODE = "full-code";
@@ -109,17 +121,46 @@ for (let i = 0; i < argv.length; i++) {
   }
   if (argv[i] === "--mode") MODE = argv[++i];
 }
-if (!["full-code", "block-code", "block-nl", "full-nl"].includes(MODE)) {
-  console.error(`ERROR: unknown --mode ${MODE} (expected full-code | block-code | block-nl | full-nl)`);
+if (!["full-code", "block-code", "block-nl", "full-nl", "agent-rewrite"].includes(MODE)) {
+  console.error(`ERROR: unknown --mode ${MODE} (expected full-code | block-code | block-nl | full-nl | agent-rewrite)`);
   process.exit(1);
 }
 
-const needsInstructions = MODE === "block-nl" || MODE === "full-nl";
+const needsInstructions = MODE === "block-nl" || MODE === "full-nl" || MODE === "agent-rewrite";
 let instructions: Record<number, string> = {};
 if (needsInstructions) {
   instructions = JSON.parse(readFileSync(INSTRUCTIONS_FILE, "utf-8"));
 }
-const allCases = JSON.parse(readFileSync(MODE.includes("block") ? CASES_BLOCK_FILE : CASES_FILE, "utf-8"));
+const allCases = JSON.parse(
+  readFileSync(MODE.includes("block") || MODE === "agent-rewrite" ? CASES_BLOCK_FILE : CASES_FILE, "utf-8")
+);
+
+// agent-rewrite mode calls a general instruct model (not fast-apply):
+// block + NL instruction -> the model rewrites the whole block.
+const IS_REWRITE = MODE === "agent-rewrite";
+let RW_ENDPOINT = "", RW_KEY = "", RW_MODEL = "";
+if (IS_REWRITE) {
+  const fc = parseEnvPrefix(ENV_CONTENT, "FASTCONTEXT_");
+  RW_ENDPOINT = fc.FASTCONTEXT_ENDPOINT ?? "";
+  RW_KEY = fc.FASTCONTEXT_API_KEY ?? process.env.FASTCONTEXT_API_KEY ?? "";
+  RW_MODEL = fc.FASTCONTEXT_MODEL ?? "";
+  if (!RW_ENDPOINT || !RW_KEY || !RW_MODEL) {
+    console.error("ERROR: FASTCONTEXT_ENDPOINT/FASTCONTEXT_API_KEY/FASTCONTEXT_MODEL not found in .env");
+    process.exit(1);
+  }
+}
+
+if (IS_REWRITE) {
+  console.log(`Endpoint: ${RW_ENDPOINT}`);
+  console.log(`Model:    ${RW_MODEL} (agent-rewrite)`);
+} else {
+  console.log(`Endpoint: ${ENDPOINT}`);
+  console.log(`Model:    ${MODEL}`);
+  if (!API_KEY) {
+    console.error("ERROR: FAST_APPLY_API_KEY not set after .env load — aborting.");
+    process.exit(1);
+  }
+}
 const cases = onlyCases.size > 0 ? allCases.filter((c) => onlyCases.has(c.case_id)) : allCases;
 if (needsInstructions) {
   for (const c of cases) {
@@ -180,14 +221,16 @@ function lineSimilarity(a, b) {
 const MAX_API_RETRIES = 3;
 const INITIAL_DELAY_MS = 1000;
 
-async function callWithRetry(messages) {
+async function callWithRetry(messages, endpoint, key, model, opts?: { retryTimeout?: boolean; extraBody?: Record<string, unknown> }) {
   let lastError = null;
   for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
     try {
-      return { content: await callOpenAiCompatibleApi(ENDPOINT, API_KEY, MODEL, messages), attempts: attempt + 1 };
+      return { content: await callOpenAiCompatibleApi(endpoint, key, model, messages, opts?.extraBody), attempts: attempt + 1 };
     } catch (error) {
       lastError = error;
-      if (attempt < MAX_API_RETRIES && isRetryable(error)) {
+      const retryable = isRetryable(error) ||
+        (opts?.retryTimeout === true && (error as Error).name === "AbortError");
+      if (attempt < MAX_API_RETRIES && retryable) {
         const delay = INITIAL_DELAY_MS * 2 ** attempt;
         console.log(`    retry ${attempt + 1} after ${delay}ms (${error.message})`);
         await new Promise((r) => setTimeout(r, delay));
@@ -210,12 +253,30 @@ let totalLatency = 0;
 for (const c of cases) {
   // Per-mode inputs and expectations. In full-code mode the "block" is the
   // whole file, so block-level and file-level metrics coincide.
-  const isFull = !MODE.includes("block");
+  const isFull = MODE === "full-code" || MODE === "full-nl";
   const originalCode = isFull ? c.original_code : c.block_original;
-  const updateSnippet = isFull
-    ? MODE === "full-nl" ? instructions[c.case_id] : c.update_snippet
-    : MODE === "block-code" ? c.block_update : instructions[c.case_id];
+  const updateSnippet = IS_REWRITE
+    ? instructions[c.case_id]
+    : isFull
+      ? MODE === "full-nl" ? instructions[c.case_id] : c.update_snippet
+      : MODE === "block-code" ? c.block_update : instructions[c.case_id];
   const expectedBlock = isFull ? c.final_code : c.block_final;
+  // Prompt: fast-apply template (byte-exact) for merge modes, plain editor
+  // prompt for agent-rewrite (general instruct model).
+  const messages = IS_REWRITE
+    ? [
+        { role: "system" as const, content: "You are an expert code editor. You rewrite code blocks to exactly implement the given instruction." },
+        { role: "user" as const, content: `Rewrite the following code block to implement the instruction.
+- Preserve the block's structure, order, comments, and indentation, except where the instruction changes them.
+- Return ONLY the complete rewritten block. No explanations, no code fences, no ellipses or placeholders.
+
+<code>
+${originalCode}
+</code>
+
+Instruction: ${updateSnippet}` },
+      ]
+    : buildPrompt(originalCode, updateSnippet);
 
   const t0 = Date.now();
   const record = {
@@ -239,34 +300,66 @@ for (const c of cases) {
   };
 
   try {
-    const messages = buildPrompt(originalCode, updateSnippet);
-    const { content, attempts } = await callWithRetry(messages);
+    const { content, attempts } = await callWithRetry(
+      messages,
+      IS_REWRITE ? RW_ENDPOINT : ENDPOINT,
+      IS_REWRITE ? RW_KEY : API_KEY,
+      IS_REWRITE ? RW_MODEL : MODEL,
+      // Agents-A1-4B is a reasoning model: its thinking budget can blow
+      // the timeout and leave `content` empty, so disable thinking and
+      // give the rewrite a generous completion budget. Also retry
+      // timeouts (the endpoint is flaky on the shared GPU); fast-apply
+      // modes keep the original timeout semantics.
+      {
+        retryTimeout: IS_REWRITE,
+        extraBody: IS_REWRITE
+          ? { chat_template_kwargs: { enable_thinking: false }, max_tokens: 8192 }
+          : undefined,
+      }
+    );
     record.api_attempts = attempts;
     record.latency_ms = Date.now() - t0;
     totalLatency += record.latency_ms;
 
-    const parsed = parseOutput(content, originalCode);
-    if (!parsed.success) {
-      record.parse_error = parsed.error;
-      record.parse_details = parsed.details;
-      writeFileSync(join(failDir, `${c.case_id}.raw.txt`), content, "utf-8");
-    } else {
+    // agent-rewrite: the model returns the block directly (no fast-apply
+    // tag contract). Light cleanup only: code fences + one outer newline.
+    let parsedCode: string | null = null;
+    if (IS_REWRITE) {
+      let out = content;
+      const fence = out.match(/^```[^\n]*\n?([\s\S]*?)\n?```$/);
+      if (fence) out = fence[1];
+      if (out.startsWith("\n")) out = out.slice(1);
+      if (out.endsWith("\n")) out = out.slice(0, -1);
+      record.rewrite_has_ellipsis = /(^|\n)\s*\.\.\.\s*(existing|code)?\s*(\n|$)|…/m.test(out);
+      parsedCode = out;
       record.parse_success = true;
-      record.est_output_tokens = Math.floor(parsed.updated_code.length / 4);
+    } else {
+      const parsed = parseOutput(content, originalCode);
+      if (!parsed.success) {
+        record.parse_error = parsed.error;
+        record.parse_details = parsed.details;
+        writeFileSync(join(failDir, `${c.case_id}.raw.txt`), content, "utf-8");
+      } else {
+        parsedCode = parsed.updated_code;
+      }
+    }
+    if (record.parse_success) {
+      const code = parsedCode!;
+      record.est_output_tokens = Math.floor(code.length / 4);
       // Block-level metrics: model output vs expected block.
-      record.exact_block = parsed.updated_code === expectedBlock;
-      record.ws_block = normalizeWs(parsed.updated_code) === normalizeWs(expectedBlock);
+      record.exact_block = code === expectedBlock;
+      record.ws_block = normalizeWs(code) === normalizeWs(expectedBlock);
       record.sim_block =
-        record.exact_block ? 1 : lineSimilarity(parsed.updated_code, expectedBlock);
+        record.exact_block ? 1 : lineSimilarity(code, expectedBlock);
       // File-level metrics: splice the model's block back into the original
       // file and compare with the ground-truth full file.
       const fullOut = isFull
-        ? parsed.updated_code
-        : spliceRange(c.original_code, c.orig_start, c.orig_end, parsed.updated_code);
+        ? code
+        : spliceRange(c.original_code, c.orig_start, c.orig_end, code);
       record.exact_file = fullOut === c.final_code;
       record.ws_file = normalizeWs(fullOut) === normalizeWs(c.final_code);
       if (!record.ws_block) {
-        writeFileSync(join(failDir, `${c.case_id}.raw.txt`), parsed.updated_code, "utf-8");
+        writeFileSync(join(failDir, `${c.case_id}.raw.txt`), code, "utf-8");
       }
     }
   } catch (e) {

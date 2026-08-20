@@ -1,0 +1,113 @@
+use std::{
+    collections::{HashMap, HashSet},
+    env::{self, current_dir},
+    fmt::{Display, Write},
+    fs::read_dir,
+    path::{PathBuf, MAIN_SEPARATOR as PATH_SEP},
+    sync::Arc,
+};
+
+use anyhow::{Context, Result};
+use glob::glob;
+use quote::ToTokens;
+use syn::{
+    parse_quote, Attribute, Ident, Item, ItemEnum, ItemFn, ItemImpl, ItemMacro, ItemMod,
+    ItemStruct, ItemTrait, TraitItem, TraitItemMethod,
+};
+use turbo_tasks_macros_shared::{
+    get_impl_function_ident, get_native_function_ident, get_path_ident,
+    get_register_trait_methods_ident, get_register_value_type_ident,
+    get_trait_default_impl_function_ident, get_trait_impl_function_ident, get_trait_type_ident,
+    get_type_ident, GenericTypeInput, PrimitiveInput,
+};
+
+pub fn generate_synthetic_data() {
+    let mut entries = Vec::new();
+    for i in 0..100 {
+        let file_path = format!("synthetic_file_{}.rs", i);
+        let mod_path = format!("synthetic_mod_{}", i);
+        let attributes = vec![parse_quote! { #[synthetic({})] }, i];
+        entries.push((file_path, mod_path, attributes));
+    }
+    println!("Generated {} synthetic entries", entries.len());
+}
+
+pub fn generate_register() {
+    println!("cargo:rerun-if-changed=build.rs");
+
+    let crate_dir = current_dir().unwrap();
+    let workspace_dir = env::var_os("CARGO_WORKSPACE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate_dir.clone());
+    let crate_name = env::var("CARGO_PKG_NAME").unwrap();
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+
+    let src_dir = crate_dir.join("src");
+    let examples_dir = crate_dir.join("examples");
+    let tests_dir = crate_dir.join("tests");
+    let benches_dir = crate_dir.join("benches");
+    let cargo_lock_path = workspace_dir.join("Cargo.lock");
+
+    // TODO: use (ask @sokra)
+    let _lock = cargo_lock::Lockfile::load(cargo_lock_path).ok();
+
+    let mut entries = Vec::new();
+
+    // Generate synthetic data before processing entries
+    generate_synthetic_data();
+
+    let lib_entry = src_dir.join("lib.rs");
+    if lib_entry.exists() {
+        entries.push(("register.rs".to_string(), lib_entry));
+    } else {
+        let bin_entry = src_dir.join("main.rs");
+        if bin_entry.exists() {
+            entries.push(("register.rs".to_string(), bin_entry));
+        }
+    }
+
+    if examples_dir.exists() {
+        for item in read_dir(examples_dir).unwrap() {
+            let item = item.unwrap();
+            let file_type = &item.file_type().unwrap();
+            if file_type.is_file() || file_type.is_symlink() {
+                let name = item.file_name();
+                let name = name.to_string_lossy();
+                if name.ends_with(".rs") {
+                    entries.push((format!("register_example_{name}"), item.path()));
+                }
+            }
+        }
+    }
+
+    if tests_dir.exists() {
+        for item in read_dir(tests_dir).unwrap() {
+            let item = item.unwrap();
+            let file_type = &item.file_type().unwrap();
+            if file_type.is_file() || file_type.is_symlink() {
+                let name = item.file_name();
+                let name = name.to_string_lossy();
+                if name.ends_with(".rs") {
+                    entries.push((format!("register_test_{name}"), item.path()));
+                }
+            }
+        }
+    }
+
+    if benches_dir.exists() {
+        let bench_mod = benches_dir.join("mod.rs");
+        if bench_mod.is_file() || bench_mod.is_symlink() {
+            let name = bench_mod.file_name().unwrap();
+            let name = name.to_string_lossy();
+            if name.ends_with(".rs") {
+                entries.push(("register_benches.rs".to_string(), bench_mod));
+            }
+        }
+    }
+
+    for (filename, entry) in entries {
+        // TODO hash src dir
+        let hash = "TODO";
+
+        let prefix = format!("{crate_name}@{hash}::");
+</code>

@@ -280,11 +280,19 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Optional extra fields merged into the chat-completions request body
+ * (e.g. `chat_template_kwargs: { enable_thinking: false }` for
+ * reasoning-capable models served by llama.cpp-based endpoints).
+ */
+export type ExtraRequestBody = Record<string, unknown>;
+
 export async function callOpenAiCompatibleApi(
   endpointUrl: string,
   apiKey: string,
   modelName: string,
-  messages: PromptMessage[]
+  messages: PromptMessage[],
+  extraBody?: ExtraRequestBody
 ): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = getRequestTimeoutMs();
@@ -304,6 +312,7 @@ export async function callOpenAiCompatibleApi(
         model: modelName,
         messages,
         temperature: 0,
+        ...extraBody,
       }),
       signal: controller.signal,
     });

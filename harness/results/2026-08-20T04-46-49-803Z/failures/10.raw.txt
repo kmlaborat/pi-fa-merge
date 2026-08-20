@@ -1,0 +1,63 @@
+      <div class="mb-6 text-lg text-center">
+        Displayed below is the total number of page views for this demo. Refresh
+        the page and watch it increase!
+      </div>
+      <button
+        @click="refreshPage()"
+        class="mb-6 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+      >
+        Refresh Page
+      </button>
+      <div class="text-5xl font-bold">{{ pageVisits?.pageVisits }}</div>
+      <div class="text-sm text-gray-600 mt-2">
+        Last updated: {{ lastUpdated }}
+      </div>
+    </div>
+    <div
+      class="w-full max-w-lg mt-6 font-light text-center text-gray-600 dark:text-gray-300"
+    >
+      Simple hello world demo of
+      <a
+        href="https://vercel.com/kv"
+        class="font-medium underline transition-colors underline-offset-4 dark:hover:text-white hover:text-black"
+      >
+        Vercel KV
+      </a>
+      <div class="flex items-center justify-center my-2">
+        <span>Built with</span>
+        <a
+          href="https://nuxt.com/docs"
+          class="flex items-center font-medium underline transition-colors underline-offset-4 dark:hover:text-white hover:text-black"
+        >
+          <img src="/nuxt.svg" class="h-6 mx-2" />
+          <p>Nuxt</p>
+        </a>
+        .
+      </div>
+    </div>
+    <div class="flex flex-col grow">
+      <a href="https://vercel.com">
+        <img
+          src="/vercel.svg"
+          alt="Vercel Logo"
+          class="my-2 text-white dark:text-white"
+        />
+      </a>
+      <a
+        href="https://github.com/vercel/examples/tree/main/storage/kv-redis-nuxt"
+        class="flex items-center h-8 mt-auto space-x-2 bottom-20 right-20"
+      >
+        <img src="/github.svg" alt="GitHub Logo" class="h-6 dark:invert" />
+        <p class="font-light">Source</p>
+      </a>
+    </div>
+  </main>
+</template>
+
+<script setup>
+const { data: pageVisits } = await useFetch(() => `/api/kv-demo`)
+const refreshPage = () => {
+  window.location.reload()
+}
+const lastUpdated = ref(new Date().toLocaleString())
+</script>
