@@ -40,12 +40,13 @@ export {
   validateStructure,
   ApiError,
   callOpenAiCompatibleApi,
+  readStreamedContent,
   isRetryable,
   withRetry,
   getMaxCodeLines,
   getRequestTimeoutMs,
 } from "./core";
-export type { PromptMessage, MergeResult } from "./core";
+export type { PromptMessage, MergeResult, ExtraRequestBody, CallOptions } from "./core";
 
 // ============================================================================
 // .env Loader (see env.ts — aligned with pi-fc-search's design)

@@ -44,10 +44,37 @@
   3. 4B が「ブロック全文」ではなく「コード snippet」を書く構成(= B の agent 版。fast-apply が merger に戻る)
 - 3 が機能すれば、PJ は「agent が snippet を書く → fast-apply がマージ → anchoredit が書く」+「agent が直接書き直す」の**2 戦略持ち**になり、モデルの強さで動的選択できる(= ユーザーの「その部分だけ別モデル」の構想の着地点)
 
+---
+
+# 第 2 ラウンド:専用チャットテンプレートモデル(2026-08-20 午後)
+
+ユーザーが同一エンドポイントに 2 つのモデル名を用意: **`Agents-A1-4B-Instruct`**(CoT 無効テンプレート)と **`Agents-A1-4B-Thinking`**(CoT 有効テンプレート)。`chat_template_kwargs` 不要で CoT を制御。
+
+## 結果
+
+| | EXACT | WS 以上 | sim≥0.95 | avgSim |
+|---|---|---|---|---|
+| B block+コード(FA) | 9/20 (45%) | 15/20 (75%) | 17/20 (85%) | 0.975 |
+| **E0 4B + thinking off(前回)** | 3/20 (15%) | 4/20 (20%) | 8/20 (40%) | 0.902 |
+| **E1 Agents-A1-4B-Instruct(全 20)** | **2/20 (10%)** | **3/20 (15%)** | **8/20 (40%)** | **0.881** |
+| **E2 Agents-A1-4B-Thinking** | — | — | — | **実用上不可**(下記) |
+
+- E1 の結果ディレクトリ: `results/2026-08-20T09-13-30-289Z/`
+- **E1 ≈ E0**(avgSim 0.881 vs 0.902、ケースごとの差 >0.02 は 0.7 の 2 件だけで互いに相殺)。専用 Instruct テンプレートは前回の `enable_thinking:false` と同等であることを確認
+- **Thinking は実測不能**: 最小ケース(8 行 SQL)で **32768 トークンを思考だけで使い切っても content 空**(約 13 分、45 tok/s で思考のみ継続)。健全性チェック(「2+2?」)では思考 487 字で正答・ループなし → モデルの破損ではなく、**このコード編集タスクで思考長が実用予算を 3 桁超えで超過**
+
+## 副次発見(重要・運用メモ)
+
+1. **llama-swap は non-streaming の応答を ~300s で遮断**: 306s で `fetch failed` が再現(2 回)。ストリーミングだと 370〜778s まで生存(チャンクがアイドルをリセット)。
+2. 対応: `callOpenAiCompatibleApi` に **SSE ストリーミング**(第 6 引数 `CallOptions { stream }`)を追加。rewrite モードは常にストリーミング使用。slow ローカルモデルの long generation で必携(テスト 61 件維持、CI 緑)。
+3. llama-swap の `/models` はモデルを `unloaded` 状態として返し、初回リクエストでロード(GGUF スワップに数秒)
+
 ## 再現
 
 ```bash
-npx tsx harness/run.mts --mode agent-rewrite --timeout 300000
-# 前提: インストール先 .env に FASTCONTEXT_ENDPOINT/API_KEY/MODEL(=Agents-A1-4B)
-# thinking off は run.mts 内 chat_template_kwargs で指定。llama.cpp 系 serve が対応必須
+# Instruct(推奨・全件 ~10 分)
+npx tsx harness/run.mts --mode agent-rewrite --rewrite-model Agents-A1-4B-Instruct --timeout 300000
+# Thinking(実測不能:最小ケースで思考 32k tok 超過。記録のため)
+npx tsx harness/run.mts --mode agent-rewrite --rewrite-model Agents-A1-4B-Thinking --case 7 --max-tokens 32768 --timeout 1800000
+# 前提: インストール先 .env に FASTCONTEXT_ENDPOINT/API_KEY
 ```

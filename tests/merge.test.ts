@@ -18,6 +18,7 @@ import {
   MAX_ARGV_PAYLOAD_CHARS,
   performMerge,
   callOpenAiCompatibleApi,
+  readStreamedContent,
   getMaxCodeLines,
   getRequestTimeoutMs,
   ApiError,
@@ -634,6 +635,55 @@ def f():
       await expect(
         callOpenAiCompatibleApi('http://localhost:9/v1', 'key', 'model', messages),
       ).rejects.toThrow(/401/);
+    });
+  });
+
+  describe('readStreamedContent (SSE)', () => {
+    // Build a mock Response whose body is an SSE stream delivered in the
+    // given raw chunks (arbitrary byte boundaries, like a real network).
+    function sseResponse(chunks: string[]): Response {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const enc = new TextEncoder();
+          for (const c of chunks) controller.enqueue(enc.encode(c));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    }
+
+    test('reassembles delta content across split chunks', async () => {
+      // One JSON object split across two network reads.
+      const resp = sseResponse([
+        'data: {"choices":[{"delta":{"cont',
+        'ent":"hello "}}]}\n\ndata: {"choices":[{"delta":{"content":"world"}}]}\n\ndata: [DONE]\n\n',
+      ]);
+      await expect(readStreamedContent(resp)).resolves.toBe('hello world');
+    });
+
+    test('ignores keep-alive / non-data / unparseable lines', async () => {
+      const resp = sseResponse([
+        ': ping\n',
+        'event: x\n',
+        'id: 42\n',
+        'data: {"choices":[{"delta":{"content":"a"}}]}\n',
+        'data: not-json-keepalive\n',
+        'data: {"choices":[{"delta":{}}]}\n',
+        'data: {"choices":[{"delta":{"content":"b"}}]}\n',
+        'data: [DONE]\n',
+      ]);
+      await expect(readStreamedContent(resp)).resolves.toBe('ab');
+    });
+
+    test('rejects when the stream produced no content', async () => {
+      const resp = sseResponse([
+        'data: {"choices":[{"delta":{}}]}\n',
+        'data: [DONE]\n',
+      ]);
+      await expect(readStreamedContent(resp)).rejects.toThrow(/no content/);
     });
   });
 });

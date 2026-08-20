@@ -287,12 +287,24 @@ export class ApiError extends Error {
  */
 export type ExtraRequestBody = Record<string, unknown>;
 
+/**
+ * Optional request options.
+ *
+ * `stream`: request an SSE stream and reassemble the content from the
+ * `choices[].delta.content` chunks. Use this for slow generations
+ * (large outputs, reasoning models): some llama.cpp-based servers
+ * (e.g. llama-swap) drop NON-streaming responses after ~300s of
+ * silence, while streamed chunks keep the connection alive.
+ */
+export type CallOptions = { stream?: boolean };
+
 export async function callOpenAiCompatibleApi(
   endpointUrl: string,
   apiKey: string,
   modelName: string,
   messages: PromptMessage[],
-  extraBody?: ExtraRequestBody
+  extraBody?: ExtraRequestBody,
+  opts?: CallOptions
 ): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = getRequestTimeoutMs();
@@ -300,8 +312,8 @@ export async function callOpenAiCompatibleApi(
   const url = `${endpointUrl}/chat/completions`;
 
   try {
-    log('debug', `Calling API: ${endpointUrl}, model: ${modelName}, timeout: ${timeoutMs}ms`);
-    
+    log('debug', `Calling API: ${endpointUrl}, model: ${modelName}, timeout: ${timeoutMs}ms${opts?.stream ? " (stream)" : ""}`);
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -312,6 +324,7 @@ export async function callOpenAiCompatibleApi(
         model: modelName,
         messages,
         temperature: 0,
+        stream: opts?.stream === true,
         ...extraBody,
       }),
       signal: controller.signal,
@@ -319,6 +332,12 @@ export async function callOpenAiCompatibleApi(
 
     if (!response.ok) {
       throw new ApiError(response.status, `${response.status} ${response.statusText}`);
+    }
+
+    if (opts?.stream === true) {
+      const content = await readStreamedContent(response);
+      log('debug', "API stream received");
+      return content;
     }
 
     const data = await response.json();
@@ -333,6 +352,48 @@ export async function callOpenAiCompatibleApi(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * Parse an OpenAI-compatible SSE stream and concatenate the delta
+ * content chunks. Non-data lines, ping keep-alives, and the terminal
+ * `[DONE]` marker are ignored.
+ */
+export async function readStreamedContent(response: Response): Promise<string> {
+  if (!response.body) {
+    throw new Error("API error: streaming response has no body");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let newline: number;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (!line.startsWith("data:")) continue; // skip event:/id:/comments
+      const payload = line.slice(5).trim();
+      if (payload === "[DONE]") continue;
+      try {
+        const json = JSON.parse(payload);
+        const delta = json?.choices?.[0]?.delta?.content;
+        if (typeof delta === "string") content += delta;
+      } catch {
+        // Ignore partial/keep-alive lines that do not parse as JSON.
+      }
+    }
+  }
+
+  if (content.length === 0) {
+    throw new Error("API error: streaming response produced no content");
+  }
+  return content;
 }
 
 // ============================================================================

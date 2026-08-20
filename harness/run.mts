@@ -111,6 +111,8 @@ const API_KEY = process.env.FAST_APPLY_API_KEY;
 // Case selection + options
 let MODE = "full-code";
 const onlyCases = new Set();
+let REWRITE_MODEL = ""; // --rewrite-model: override FASTCONTEXT_MODEL (agent-rewrite)
+let REWRITE_MAX_TOKENS = 8192; // --max-tokens: completion budget (agent-rewrite)
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === "--case") onlyCases.add(parseInt(argv[++i], 10));
@@ -120,6 +122,8 @@ for (let i = 0; i < argv.length; i++) {
     process.env.FAST_APPLY_TIMEOUT = argv[++i];
   }
   if (argv[i] === "--mode") MODE = argv[++i];
+  if (argv[i] === "--rewrite-model") REWRITE_MODEL = argv[++i];
+  if (argv[i] === "--max-tokens") REWRITE_MAX_TOKENS = parseInt(argv[++i], 10);
 }
 if (!["full-code", "block-code", "block-nl", "full-nl", "agent-rewrite"].includes(MODE)) {
   console.error(`ERROR: unknown --mode ${MODE} (expected full-code | block-code | block-nl | full-nl | agent-rewrite)`);
@@ -143,7 +147,7 @@ if (IS_REWRITE) {
   const fc = parseEnvPrefix(ENV_CONTENT, "FASTCONTEXT_");
   RW_ENDPOINT = fc.FASTCONTEXT_ENDPOINT ?? "";
   RW_KEY = fc.FASTCONTEXT_API_KEY ?? process.env.FASTCONTEXT_API_KEY ?? "";
-  RW_MODEL = fc.FASTCONTEXT_MODEL ?? "";
+  RW_MODEL = REWRITE_MODEL || fc.FASTCONTEXT_MODEL || "";
   if (!RW_ENDPOINT || !RW_KEY || !RW_MODEL) {
     console.error("ERROR: FASTCONTEXT_ENDPOINT/FASTCONTEXT_API_KEY/FASTCONTEXT_MODEL not found in .env");
     process.exit(1);
@@ -221,11 +225,11 @@ function lineSimilarity(a, b) {
 const MAX_API_RETRIES = 3;
 const INITIAL_DELAY_MS = 1000;
 
-async function callWithRetry(messages, endpoint, key, model, opts?: { retryTimeout?: boolean; extraBody?: Record<string, unknown> }) {
+async function callWithRetry(messages, endpoint, key, model, opts?: { retryTimeout?: boolean; extraBody?: Record<string, unknown>; stream?: boolean }) {
   let lastError = null;
   for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
     try {
-      return { content: await callOpenAiCompatibleApi(endpoint, key, model, messages, opts?.extraBody), attempts: attempt + 1 };
+      return { content: await callOpenAiCompatibleApi(endpoint, key, model, messages, opts?.extraBody, { stream: opts?.stream }), attempts: attempt + 1 };
     } catch (error) {
       lastError = error;
       const retryable = isRetryable(error) ||
@@ -281,6 +285,7 @@ Instruction: ${updateSnippet}` },
   const t0 = Date.now();
   const record = {
     mode: MODE,
+    model: IS_REWRITE ? RW_MODEL : MODEL,
     case_id: c.case_id,
     stratum: c.stratum,
     file_name: c.file_name,
@@ -305,16 +310,21 @@ Instruction: ${updateSnippet}` },
       IS_REWRITE ? RW_ENDPOINT : ENDPOINT,
       IS_REWRITE ? RW_KEY : API_KEY,
       IS_REWRITE ? RW_MODEL : MODEL,
-      // Agents-A1-4B is a reasoning model: its thinking budget can blow
-      // the timeout and leave `content` empty, so disable thinking and
-      // give the rewrite a generous completion budget. Also retry
-      // timeouts (the endpoint is flaky on the shared GPU); fast-apply
-      // modes keep the original timeout semantics.
+      // The Thinking variant spends thousands of tokens on
+      // reasoning_content before answering (probe: 4096 tokens on a
+      // trivial prompt), so it needs a large --max-tokens and a long
+      // --timeout. Timeouts are retried (the endpoint is flaky on the
+      // shared GPU); fast-apply modes keep the original semantics.
       {
         retryTimeout: IS_REWRITE,
-        extraBody: IS_REWRITE
-          ? { chat_template_kwargs: { enable_thinking: false }, max_tokens: 8192 }
-          : undefined,
+        // CoT is controlled by the chat template (model names
+        // Agents-A1-4B-Instruct / -Thinking), so only the completion
+        // budget is passed here.
+        extraBody: IS_REWRITE ? { max_tokens: REWRITE_MAX_TOKENS } : undefined,
+        // Streaming keeps the connection alive past the server's ~300s
+        // non-streaming cutoff (required for the Thinking variant's
+        // long generations).
+        stream: IS_REWRITE,
       }
     );
     record.api_attempts = attempts;

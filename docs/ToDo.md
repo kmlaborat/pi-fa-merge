@@ -26,9 +26,9 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 | `harness/block.mjs` | GT diff(LCS)からブロック+re-scoped snippet を機械抽出 → `cases-block.json`(末尾改行不整合・del 境界を処理。splicing 不変条件を全件で検証) |
 | `harness/instructions.json` | 20 件の自然言語編集指示(手書き、コード本文なし) — mode C/D 用 |
 | `harness/results/ab-experiment-2026-08-20.md` | **2軸 A/B 実験報告**(A 65% / B 45% / C 15% / D 15% EXACT、ブロックで 2 倍速・-43% tok、NL は不採用判断) |
-| `harness/results/agent-rewrite-2026-08-20.md` | **agent-rewrite 実験報告**(4B 直接書き直し: 15% EXACT、B に未達。4B は reasoning モデルで `enable_thinking:false` 必須) |
+| `harness/results/agent-rewrite-2026-08-20.md` | **agent-rewrite 実験報告**(2 ラウンド: E0 thinking-off 15% / E1 Instruct 10% — ともに B に未達、E2 Thinking は思考 32k tok 超過で実測不能。llama-swap の 300s non-streaming 遮断と streaming 対応) |
 
-`extensions/core.ts` の `callOpenAiCompatibleApi` は任意の `extraBody`(例: `chat_template_kwargs`)をリクエストに追加可能(reasoning モデル対応)。
+`extensions/core.ts` の `callOpenAiCompatibleApi` は任意の `extraBody` と `CallOptions { stream }`(SSE ストリーミング、slow モデルの 300s 遮断回避)を受け取る。
 | `docs/SPEC.md` | 契約(パラメータ・エラー種別・受け入れテスト)。実装と同期済み |
 | `skills/pi-fa-merge/SKILL.md` | エージェント向けスキル |
 
@@ -61,7 +61,7 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 | `7978738` | CI Node 20→22(pi-coding-agent が >=22.19 を要求) |
 | `9549fe2` | `.env` ロードの pi-fc-search 整合 + `/reload-env` 追加(→ 次コミットで `reload-fa-env` に改名) |
 | `06b43eb` | `/reload-fa-env` 改名 + この文書追加 |
-| (本セッション) | ① 純粋コアを `extensions/core.ts` に抽出(pi 非依存化。index.ts は re-export で後方互換、59 テスト維持) ② 評価ハーネス `harness/` 新設 + **実測ベースライン実行**(20 件、結果 `harness/results/baseline-2026-08-19.md`) ③ e2e(anchoredit 書き込み)確認完了 ④ **validateStructure 誤爆修正**(prefix `startsWith` → 50% 存在チェック、テスト 61 件、再実行で誤爆 0/20 を確認) ⑤ README タイムアウト推奨追記 ⑥ **2軸 A/B 実験実行**(full/block × code/NL、`harness/block.mjs` 新設、結果 `harness/results/ab-experiment-2026-08-20.md`) ⑦ **agent-rewrite 実験実行**(4B 直接書き直し、thinking モデル問題の発見・対処、`extraBody` 追加、結果 `harness/results/agent-rewrite-2026-08-20.md`) |
+| (本セッション) | ① 純粋コアを `extensions/core.ts` に抽出(pi 非依存化。index.ts は re-export で後方互換、59 テスト維持) ② 評価ハーネス `harness/` 新設 + **実測ベースライン実行**(20 件、結果 `harness/results/baseline-2026-08-19.md`) ③ e2e(anchoredit 書き込み)確認完了 ④ **validateStructure 誤爆修正**(prefix `startsWith` → 50% 存在チェック、テスト 61 件、再実行で誤爆 0/20 を確認) ⑤ README タイムアウト推奨追記 ⑥ **2軸 A/B 実験実行**(full/block × code/NL、`harness/block.mjs` 新設、結果 `harness/results/ab-experiment-2026-08-20.md`) ⑦ **agent-rewrite 実験 2 ラウンド実行**(E0/E1/E2: 専用テンプレートモデルで再計測、Instruct≒thinking-off を確認、Thinking は思考 32k tok 超過で実測不能、llama-swap の 300s non-streaming 遮断を発見し core.ts に SSE ストリーミング追加、`--rewrite-model`/`--max-tokens` フラグ追加、結果 `harness/results/agent-rewrite-2026-08-20.md`) |
 
 ## 実測ベースラインの結果サマリ(詳細: `harness/results/baseline-2026-08-19.md`)
 
@@ -101,15 +101,15 @@ kortix-ai/fast-apply 仕様に準拠した pi 拡張。エージェントが `or
 
 ### 5. 4B agentic モデルとのエンドツーエンド(**次の着手先**) ⭐
 - **Agents-A1-4B は serve 済み**(`FASTCONTEXT_*`、llama-swap + `Agents-A1-4B-Q8_0.gguf`、FastApply と同一ホスト)
-- **第一実測(agent-rewrite: 4B がブロック+NL から直接書き直し)は完了** → 報告 `harness/results/agent-rewrite-2026-08-20.md`。
-  - EXACT 3/20 (15%)、sim≥0.95 8/20 (40%)、avgSim 0.902 → **B(block+code via fast-apply: 45%/85%)に未達**。NL 系(C/D)とほぼ同水準
-  - 失敗プロファイル: ① 空行等のフォーマット差(機能は正しい、例: case 7) ② 挿入位置誤り ③ ファイル idiom 未踏襲(例: `@apply` 不使用)
-  - **重要: 4B は reasoning モデル**。thinking 有効だと `content` 空・TTFT 数分(タイムアウト地獄)→ `chat_template_kwargs:{enable_thinking:false}` で計測。thinking on は未計測の重要変数
-  - core.ts の `callOpenAiCompatibleApi` に `extraBody` を追加済み(本ツール化でもそのまま使える)
-- 次の検証(費用順):
-  1. 4B thinking on(max_tokens/タイムアウト拡大、少数ケース)で推論品質の寄与を確認
-  2. プロンプト強化(few-shot、idiom 踏襲、フォーマット指定)
-  3. **4B がコード snippet を書く構成**(= B の agent 版、fast-apply が merger に復帰)→ 成功すれば「snippet 経路 + 直接書き直し経路」の 2 戦略 PJ に
+- **agent-rewrite 実験 2 ラウンド完了** → 報告 `harness/results/agent-rewrite-2026-08-20.md`。
+  - **E0**(4B + `enable_thinking:false`): EXACT 3/20 (15%)、avgSim 0.902
+  - **E1**(`Agents-A1-4B-Instruct` 専用テンプレート、全 20): EXACT 2/20 (10%)、avgSim 0.881 → **E0 と同等**(専用テンプレートは thinking off と同等であることを確認)。**B(block+code via fast-apply: 45%/85%)に未達**の結論は不変
+  - **E2**(`Agents-A1-4B-Thinking`): **実用上不可** — 最小ケース(8 行 SQL)で 32768 トークンを思考だけで使い切り content 空(約 13 分)。2+2 健全性チェックでは正常(思考 487 字・正答・ループなし)→ モデル破損ではなく思考長が実用予算を超過
+  - 失敗プロファイル(E1): ① 空行/空白等のフォーマット差(機能は正しい) ② 挿入位置誤り ③ ファイル idiom 未踏襲(例: `@apply` 不使用)
+  - **運用発見**: llama-swap は non-streaming 応答を ~300s で遮断(306s で `fetch failed` が再現)→ core.ts に **SSE ストリーミング**(`CallOptions { stream }`)を追加済み。rewrite モードは常時ストリーミング
+- 次の検証(費用順、thinking on は除外済み):
+  1. プロンプト強化(few-shot、idiom 踏襲、フォーマット指定)で E を引き上げられるか
+  2. **4B がコード snippet を書く構成**(= B の agent 版、fast-apply が merger に復帰)→ 成功すれば「snippet 経路 + 直接書き直し経路」の 2 戦略 PJ に
 - 未着手: 「4B が fa_merge 引数を生成」のハーネスモード(引数生成を評価)
 
 ### 2.5. ~~validateStructure の誤爆修正~~ — **完了 (2026-08-20)** ⭐
