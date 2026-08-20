@@ -3,7 +3,8 @@
 | 項目 | 内容 |
 |------|------|
 | 更新日 | 2026-08-20 |
-| 最新コミット | agent-rewrite 実験(4B 直接書き直し)完了コミットまで。最新は `git log -3` で確認 |
+| **状態** | **一時的に保留中(shelved)**。全実験(A〜E4)は完了・報告済み、main と同期、CI 緑、テスト 64 件。再開時は「### 5」の次の検証 1(agent が fa_merge 引数を生成する構成の実証)から |
+| 最新コミット | `docs: add experiment summary` まで。最新は `git log -3` で確認 |
 | リポジトリ | `C:\Users\Game\MyDevEnv\wd\pi-fa-merge`(リモート: github.com/kmlaborat/pi-fa-merge) |
 | インストール先 | `C:\Users\Game\MyDevEnv\.home\.pi\agent\git\github.com\kmlaborat\pi-fa-merge`(`9549fe2` まで pull 済み、`.env` は存在) |
 | 前提PJ | `C:\Users\Game\MyDevEnv\wd\AnchorScope` / `AnchorEdit`(v2、`main` clean。AnchorScope はライブラリ依存。`anchoredit` バイナリ v2.0.0 はインストール済み — 修正なければ再 `cargo install` 不要) |
