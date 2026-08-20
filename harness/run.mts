@@ -113,6 +113,8 @@ let MODE = "full-code";
 const onlyCases = new Set();
 let REWRITE_MODEL = ""; // --rewrite-model: override FASTCONTEXT_MODEL (agent-rewrite)
 let REWRITE_MAX_TOKENS = 8192; // --max-tokens: completion budget (agent-rewrite)
+let REWRITE_ENDPOINT = ""; // --rewrite-endpoint: override the FASTCONTEXT endpoint
+let REWRITE_KEY = ""; // --rewrite-key: override the API key (empty = no auth)
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === "--case") onlyCases.add(parseInt(argv[++i], 10));
@@ -123,6 +125,8 @@ for (let i = 0; i < argv.length; i++) {
   }
   if (argv[i] === "--mode") MODE = argv[++i];
   if (argv[i] === "--rewrite-model") REWRITE_MODEL = argv[++i];
+  if (argv[i] === "--rewrite-endpoint") REWRITE_ENDPOINT = argv[++i];
+  if (argv[i] === "--rewrite-key") REWRITE_KEY = argv[++i];
   if (argv[i] === "--max-tokens") REWRITE_MAX_TOKENS = parseInt(argv[++i], 10);
 }
 if (!["full-code", "block-code", "block-nl", "full-nl", "agent-rewrite"].includes(MODE)) {
@@ -145,11 +149,12 @@ const IS_REWRITE = MODE === "agent-rewrite";
 let RW_ENDPOINT = "", RW_KEY = "", RW_MODEL = "";
 if (IS_REWRITE) {
   const fc = parseEnvPrefix(ENV_CONTENT, "FASTCONTEXT_");
-  RW_ENDPOINT = fc.FASTCONTEXT_ENDPOINT ?? "";
-  RW_KEY = fc.FASTCONTEXT_API_KEY ?? process.env.FASTCONTEXT_API_KEY ?? "";
+  RW_ENDPOINT = REWRITE_ENDPOINT || fc.FASTCONTEXT_ENDPOINT || "";
+  RW_KEY = REWRITE_KEY || fc.FASTCONTEXT_API_KEY || process.env.FASTCONTEXT_API_KEY || "";
   RW_MODEL = REWRITE_MODEL || fc.FASTCONTEXT_MODEL || "";
-  if (!RW_ENDPOINT || !RW_KEY || !RW_MODEL) {
-    console.error("ERROR: FASTCONTEXT_ENDPOINT/FASTCONTEXT_API_KEY/FASTCONTEXT_MODEL not found in .env");
+  // A key is optional: some local servers (e.g. mlx-lm) require no auth.
+  if (!RW_ENDPOINT || !RW_MODEL) {
+    console.error("ERROR: rewrite endpoint + model required (FASTCONTEXT_* in .env or --rewrite-endpoint/--rewrite-model)");
     process.exit(1);
   }
 }
@@ -338,7 +343,9 @@ Instruction: ${updateSnippet}` },
       let out = content;
       const fence = out.match(/^```[^\n]*\n?([\s\S]*?)\n?```$/);
       if (fence) out = fence[1];
-      if (out.startsWith("\n")) out = out.slice(1);
+      // Preamble newlines are model formatting, not block content
+      // (no ground-truth block starts with a newline).
+      out = out.replace(/^\n+/, "");
       if (out.endsWith("\n")) out = out.slice(0, -1);
       record.rewrite_has_ellipsis = /(^|\n)\s*\.\.\.\s*(existing|code)?\s*(\n|$)|…/m.test(out);
       parsedCode = out;

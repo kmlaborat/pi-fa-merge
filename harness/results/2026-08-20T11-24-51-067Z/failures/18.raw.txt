@@ -1,0 +1,21 @@
+import React, { useEffect } from 'react';
+
+/**
+ * Dynamically loads fonts-zh...
+ */
+const FontsZh = () => {
+  useEffect(() => {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/public/fonts/fonts-zh/css';
+    document.head.appendChild(link);
+
+    return () => {
+      document.head.removeChild(link);
+    };
+  }, []);
+
+  return <></>;
+};
+
+export.default FontsZh;

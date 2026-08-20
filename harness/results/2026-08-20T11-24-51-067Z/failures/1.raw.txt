@@ -1,0 +1,14 @@
+.container {
+    padding: 0 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+    background-color: #f0f0f0;
+    color: #333;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+@media (max-width: 768px) {
+    .title {
+        font-size: 3rem;
+    }
+}

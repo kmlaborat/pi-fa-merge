@@ -76,5 +76,27 @@
 npx tsx harness/run.mts --mode agent-rewrite --rewrite-model Agents-A1-4B-Instruct --timeout 300000
 # Thinking(実測不能:最小ケースで思考 32k tok 超過。記録のため)
 npx tsx harness/run.mts --mode agent-rewrite --rewrite-model Agents-A1-4B-Thinking --case 7 --max-tokens 32768 --timeout 1800000
-# 前提: インストール先 .env に FASTCONTEXT_ENDPOINT/API_KEY
+# E3: mlx-lm の 2bit モデル(キー不要、エンドポイントをフラグで指定)
+npx tsx harness/run.mts --mode agent-rewrite \
+  --rewrite-endpoint http://msm2.tail3eb0d5.ts.net:8082/v1 \
+  --rewrite-model maple-preview-2bit-mlx --timeout 600000
+# 前提: Instruct/Thinking はインストール先 .env の FASTCONTEXT_*。E3 は .env 不要
 ```
+
+---
+
+# 第 3 ラウンド:mlx-lm `maple-preview-2bit-mlx`(2026-08-20 夜)
+
+mlx-lm で別サーバ(:8082)を立て、`maple-preview-2bit-mlx`(**2bit 量子化** MLX)を実測。キー不要(mlx-lm は auth 必須でない)。ハーネスに `--rewrite-endpoint`/`--rewrite-key` フラグを追加し `.env` 変更なしで計測。
+
+## 結果(同一 20 件)
+
+| | EXACT | WS 以上 | sim≥0.95 | avgSim | 中央値レイテンシ |
+|---|---|---|---|---|---|
+| B ブロック+コード(FA) | 9/20 (45%) | 15/20 (75%) | 17/20 (85%) | 0.975 | 18.2s |
+| E1 Agents-A1-4B-Instruct | 2/20 (10%) | 3/20 (15%) | 8/20 (40%) | 0.881 | ~17s |
+| **E3 maple-preview-2bit-mlx** | **1/20 (5%)** | **1/20 (5%)** | **1/20 (5%)** | **0.542** | 24.2s |
+
+- E3 の結果ディレクトリ: `results/2026-08-20T11-24-51-067Z/`
+- **2bit 量子化の劣化が致命的**: 小ケースは動く(case 3 は EXACT、case 7 は sim 0.571 で機能正解)が、**大ブロックで反復デジュネレーション**が発生。case 6(348 行 Rust)では `inline_globals2` を数百回繰り返す生成ループ + 無意味な import(`Arc, Arc` / `HashString` / `String as HashString`)で sim 0.017。case 1/5/10 も 0.07〜0.13 と壊滅。case 19 は streaming が content 空で失敗(API_FAIL)。
+- 結論: **動作・速度は問題ないが(小プロンプト ~1s、~60 tok/s、キー不要)、品質は Agents-A1-4B-Instruct(avgSim 0.881)を大きく下回る**。2bit の情報欠落が大ブロックの忠実な書き直しを維持できない。rewrite バックエンドとして推奨しない。より高いビット数(4bit 以上)に量子化し直せば再評価の価値はある。

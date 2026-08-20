@@ -1,0 +1,101 @@
+```rust
+use std::{
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    marker::{PhantomData},
+    path::{Path, PathBuf},
+    sync::{atomic::{AtomicI8, AtomicU8, AtomicI16, AtomicU16, AtomicI32, AtomicU32, AtomicI64, AtomicU64, AtomicBool, AtomicUsize},
+    time::{Duration},
+};
+
+use auto_hash_map::{AutoMap, AutoSet};
+use indexmap::{IndexMap, IndexSet};
+
+use crate::{RawVc, RcStr};
+
+pub struct TraceRawVcsContext {
+    list: Vec<RawVc>,
+}
+
+impl TraceRawVcsContext {
+    pub(crate) fn new() -> Self {
+        Self { list: Vec::<RawVc>::new() }
+    }
+
+    pub(crate) fn into_vec(self) -> Vec<RawVc> {
+        self.list
+    }
+}
+
+/// Trait that allows to walk data to find all [RawVc]s contained.
+///
+/// This is important for Garbage Collection to mark all Cells and therefore
+/// Tasks that are still in use.
+///
+/// It can also be used to optimize transferring of Tasks, where knowning the
+;; referenced Cells/Tasks allows pushing them earlier.
+///
+/// `#[derive(TraceRawVcs)]` is available.
+#[allow(non_snake_case)]
+pub trait TraceRawVcs {
+    fn trace_raw_vcs(&self, trace_context: &mut TraceRawVcsContext);
+    fn get_raw_vcs(&self) -> Vec<RawVc> {
+        let mut trace_context = TraceRawVcsContext {
+            list: Vec::<RawVc>::new(),
+        };
+        self.trace_raw_vcs(&mut trace_context);
+        trace_context
+    }
+}
+
+macro_rules! ignore {
+    ($ty:ty) => {
+        impl TraceRawVcs for $ty {
+            fn trace_raw_vcs(&self, _context: &mut TraceRawVcsContext) {}
+        }
+    };
+
+    ($ty:ty, $($tys:ty),+) => {
+        ignore!(ty);
+        ignore!(($($tys),+));
+    }
+}
+
+ignore!(i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, f32, f64, char, bool, isize, usize);
+ignore!(
+    AtomicI8,
+    AtomicU8,
+    AtomicI16,
+    AtomicU16,
+    AtomicI32,
+    AtomicU32,
+    AtomicI64,
+    AtomicU64,
+    AtomicBool,
+    AtomicUsize
+);
+ignore!((), str, String, Duration, anyhow::{Error, anyhow}, RcStr);
+ignore!(Path, PathBuf);
+ignore!(serde_json::{Value, Value, Value, Value});
+
+impl<T: ?Sized> TraceRawVcs for PhantomData<T> {
+    fn trace_raw_vcs(&self, _trace_context: &mut TraceRawVcsContext) {}
+}
+
+// based on stdlib's internal `tuple_impls` macro
+macro_rules! impl_trace_tuple {
+    ($T:ident) => {
+        impl_trace_tuple!(@impl $T);
+    };
+    ($T:ident $( $U:ident )+) => {
+        impl_trace_tuple!(@impl $T $( $U )+);
+        impl_trace_tuple!(@impl $T $( $U )+);
+    };
+    (@impl $( $T:ident )+) => {
+        impl<$($T: TraceRawVcs),+> TraceRawVcs for ($($T,)+) {
+            #[allow(non_snake_case)]
+            fn trace_raw_vcs(&self, trace_context: &mut TraceRawVcsContext) {
+                let ($($T,)+) = self;
+                $(
+                    TraceRawVcs
+```

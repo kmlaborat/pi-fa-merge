@@ -1,0 +1,51 @@
+import type { NextPage } from "next";
+import Head from "next/head";
+import Link from "next/link";
+import styles from "../styles/Home.module.css";
+import { useState } from "react";
+import { useRouter } from "next/router";
+
+const Home: NextPage = () => {
+  const [imageUrl, setImageUrl] = React.useState("");
+  const router = useRouter();
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const encodedUrl = encodeURIComponent(imageUrl);
+    router.push(`/api/generate?image=${encodedUrl}`);
+  };
+
+  return (
+    <div className={styles.container}>
+      <Head>
+        <title>Alt Image Generator</title>
+        <meta name="description" content="Alt image generator" />
+        <link rel="icon" href="/favicon.ico" />
+      </Head>
+
+      <h1 className={styles.h1}> Alt Image Generator</h1>
+      <p>
+        Send a request to `/api/generate` with `imageUrl` as a query parameter:
+      </p>
+      <Link
+        className={styles.highlight}
+        href="/api/generate?image=https://dub.sh/confpic"
+      >
+        http://localhost:3000/api/generate?image=https://dub.sh/confpic
+      </Link>
+
+      <form onSubmit={handleSubmit}>
+        <input
+          type="text"
+          placeholder="Enter image URL"
+          className={styles.input}
+        />
+        <button type="submit" className={styles.button}>
+          Generate Alt Text
+        </button>
+      </form>
+    </div>
+  );
+};
+
+export default Home;

@@ -1,0 +1,17 @@
+```rust
+    pub fn get_import_count(&self) -> usize {
+        self.imports.len() + self.namespace_imports.len()
+    }
+
+    pub fn get_reexport_count(&self) -> usize {
+        self.reexports.len()
+    }
+```
+
+```rust
+impl ImportMapReference {
+    pub fn get_module_path(&self) -> &JsWord {
+        &self(module_path)
+    }
+}
+```
